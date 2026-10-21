@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <title>JobParser / Пульт управления</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='viewer.css') }}">
+  <script src="{{ url_for('static', filename='panel.js') }}" defer></script>
+</head>
+<body>
+  <aside><a class="brand" href="#overview">JP<span> / рабочая станция</span></a><nav><a href="#new-run">Новый поиск</a><a href="#databases">Базы и отчёты</a><a href="#history">Журнал задач</a></nav><div class="aside-note">Браузер вместо терминала.<br>Одна задача за раз.<br>Данные остаются на сервере.</div></aside>
+  <main id="overview">
+    <header><div><p class="eyebrow">JOBPARSER / OPERATIONS</p><h1>Работа с вакансиями</h1><p>Собирайте, дополняйте и анализируйте. Каждый поиск сохраняется отдельно.</p></div><div><span id="connection" class="badge">Подключение…</span><a class="novnc-link" href="{{ novnc_url }}" target="_blank" rel="noreferrer">Открыть экран браузера ↗</a></div></header>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section class="metrics"><div><span>Базы поиска</span><strong id="db-count">—</strong></div><div><span>Вакансии</span><strong id="job-count">—</strong></div><div><span>Текущая задача</span><strong id="active-label">—</strong></div></section>
+    <section id="new-run" class="card"><div class="section-heading"><h2>01 / Новый поиск</h2><span>Без AI по умолчанию</span></div>
+      <form id="scrape-form">
+        <div class="form-grid"><label>Должности, по одной в строке<textarea name="roles" rows="3" maxlength="4000" placeholder="Product Manager&#10;Business Analyst"></textarea></label><label>Страны, по одной в строке<textarea name="countries" rows="3" maxlength="4000" placeholder="Germany&#10;Europe (Remote)"></textarea></label></div>
+        <p class="hint">Пустые списки используют стандартные настройки. Не более 50 строк в каждом списке.</p>
+        <div class="numbers"><label>Лимит вакансий<input name="limit" type="number" value="50" min="1" max="5000" required></label><label>За последние, ч<input name="lookback" type="number" value="24" min="1" max="720" required></label><label>Страниц на поиск<input name="max_pages" type="number" value="6" min="1" max="100" required></label><label>Браузеров<select name="browsers"><option>1</option><option>2</option></select></label></div>
+        <div class="form-bottom"><div><label class="check"><input name="ai" type="checkbox">Разрешаю платный AI-анализ</label><label class="check"><input name="interactive" type="checkbox">Интерактивный браузер через noVNC (только 1 браузер)</label></div><button type="submit" data-start>Начать сбор</button></div>
+      </form>
+    </section>
+    <section id="databases" class="card"><div class="section-heading"><h2>02 / Базы и отчёты</h2><span>SQLite · снимок при скачивании</span></div><div class="table-scroll"><table><thead><tr><th>База</th><th>Всего</th><th>Разобрано</th><th>AI</th><th>Скачать</th></tr></thead><tbody id="database-list"></tbody></table></div>
+      <form id="action-form"><div class="form-grid"><label>База<select name="db" id="db-select" required></select></label><label>Действие<select name="command"><option value="retry">Повторить незавершённое</option><option value="analyze">AI-анализ</option><option value="export">Экспорт</option></select></label></div><div class="numbers"><label>Лимит<input name="limit" type="number" value="50" min="1" max="5000" required></label><label>Страниц (повтор)<input name="max_pages" type="number" value="6" min="1" max="100" required></label><label>Формат экспорта<select name="format"><option value="html">HTML</option><option value="csv">CSV</option><option value="markdown">Markdown</option></select></label><label>Мин. оценка (экспорт)<input name="min_score" type="number" min="0" max="100" placeholder="Все"></label></div><div class="form-bottom"><div><label class="check"><input name="ai" type="checkbox">Разрешаю платный AI-анализ</label><label class="check"><input name="refresh_searches" type="checkbox">Повторить также завершённые поиски</label><label class="check"><input name="interactive" type="checkbox">Интерактивный браузер через noVNC</label></div><button type="submit" data-start>Выполнить</button></div></form>
+      <div class="viewer-heading"><h3>Вакансии в выбранной базе</h3><button id="load-jobs" type="button" class="secondary">Показать</button></div><div id="jobs-view" class="jobs-view"><p class="hint">Выберите базу и нажмите «Показать».</p></div><div id="jobs-pages" class="viewer-heading"></div>
+      <h3>Отчёты для скачивания</h3><p class="hint">HTML скачивается, а не выполняется внутри панели. Открывайте только доверенные файлы.</p><div id="report-list" class="file-list"></div><h3>CV на сервере</h3><p id="cv-list" class="hint"></p>
+    </section>
+    <section id="history" class="card"><div class="section-heading"><h2>03 / Журнал задач</h2><span>Обновление каждые 3 секунды</span></div><div id="task-list"></div><div class="log-heading"><h3 id="log-title">Выберите задачу для просмотра лога</h3><span>Последние 64 КиБ</span></div><pre id="log" tabindex="0"></pre></section>
+    <footer>JobParser · headless mode · AI требует отдельного согласия</footer>
+  </main>
+</body>
+</html>

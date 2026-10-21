@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#171719"/>
+  <rect x="8.75" y="8.75" width="238.5" height="238.5" rx="55.25" fill="none" stroke="#2e2e33" stroke-width="1.5"/>
+  <!-- the funnel: jobs found, jobs that fit, applications sent -->
+  <rect x="56" y="64" width="144" height="30" rx="15" fill="#ffffff"/>
+  <rect x="56" y="113" width="104" height="30" rx="15" fill="#8a8c92"/>
+  <rect x="56" y="162" width="64" height="30" rx="15" fill="#4a8ad6"/>
+  <path d="M146 177l13 13 27-29" fill="none" stroke="#4a8ad6" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

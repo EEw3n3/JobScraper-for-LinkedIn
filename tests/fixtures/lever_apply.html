@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Example SIA - Python Developer</title></head>
+<body>
+<!-- Offline imitation of a Lever hosted application: fields wrapped in labels, ✱ marks required,
+     custom questions as radio lists without a fieldset, one page, redirect to /thanks on success. -->
+<div class="posting-header"><h2>Python Developer</h2><div>Riga, Latvia</div></div>
+<form id="application-form" action="#" method="post">
+  <h4>Submit your application</h4>
+  <ul>
+    <li class="application-question resume">
+      <label>
+        <div class="application-label">Resume/CV<span class="required">✱</span></div>
+        <div class="application-field"><a class="visible-resume-upload">ATTACH RESUME/CV<input type="file" name="resume" id="resume-upload-input" style="display:none"></a></div>
+      </label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">Full name<span class="required">✱</span></div>
+        <div class="application-field"><input type="text" name="name" required></div></label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">Email<span class="required">✱</span></div>
+        <div class="application-field"><input type="email" name="email" required></div></label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">Phone</div>
+        <div class="application-field"><input type="text" name="phone"></div></label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">Current company</div>
+        <div class="application-field"><input type="text" name="org"></div></label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">LinkedIn URL</div>
+        <div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">GitHub URL</div>
+        <div class="application-field"><input type="text" name="urls[GitHub]"></div></label>
+    </li>
+    <li class="application-question custom-question">
+      <div class="application-label"><div class="text">Are you legally authorized to work in the EU?<span class="required">✱</span></div></div>
+      <div class="application-field"><ul>
+        <li><label><input type="radio" name="cards[1][field0]" value="Yes"><span class="application-answer-alternative">Yes</span></label></li>
+        <li><label><input type="radio" name="cards[1][field0]" value="No"><span class="application-answer-alternative">No</span></label></li>
+      </ul></div>
+    </li>
+    <li class="application-question custom-question">
+      <div class="application-label"><div class="text">How did you hear about this job?</div></div>
+      <div class="application-field"><input type="text" name="cards[1][field1]"></div>
+    </li>
+    <li class="application-question">
+      <label><div class="application-label">Additional information</div>
+        <div class="application-field"><textarea name="comments" placeholder="Add a cover letter or anything else you want to share."></textarea></div></label>
+    </li>
+  </ul>
+  <div class="error-message" id="error" hidden></div>
+  <button type="submit" id="btn-submit">Submit application</button>
+</form>
+<div id="thanks" hidden><h3>Application submitted!</h3><p>Thank you for applying.</p></div>
+<script>
+  window.submitted = null;
+  document.querySelector('.visible-resume-upload').addEventListener('click', e => {
+    if (e.target.tagName !== 'INPUT') document.getElementById('resume-upload-input').click();
+  });
+  document.getElementById('application-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    const missing = [];
+    if (!f.resume.files.length) missing.push('resume');
+    if (!f.name.value) missing.push('name');
+    if (!f.email.value) missing.push('email');
+    if (!f.querySelector('input[name="cards[1][field0]"]:checked')) missing.push('authorization');
+    if (missing.length) { const el = document.getElementById('error'); el.textContent = 'Missing: ' + missing.join(', '); el.hidden = false; return; }
+    window.submitted = {name: f.name.value, email: f.email.value, phone: f.phone.value, org: f.org.value,
+                        linkedin: f['urls[LinkedIn]'].value, github: f['urls[GitHub]'].value,
+                        auth: f.querySelector('input[name="cards[1][field0]"]:checked').value,
+                        heard: f['cards[1][field1]'].value, comments: f.comments.value, resume: f.resume.files[0].name};
+    f.hidden = true;
+    document.getElementById('thanks').hidden = false;
+  });
+</script>
+</body>
+</html>

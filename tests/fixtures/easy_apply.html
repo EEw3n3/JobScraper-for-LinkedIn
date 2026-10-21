@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Python Developer | Example Company | LinkedIn</title>
+<style>
+  .hidden { display: none; }
+  [role=dialog] { border: 1px solid #999; padding: 12px; margin: 12px; }
+</style>
+</head>
+<body>
+<!-- A small offline imitation of LinkedIn's Easy Apply dialog: the same roles, classes and labels. -->
+<div class="job-details-jobs-unified-top-card__company-name"><a href="#">Example Company</a></div>
+<button class="jobs-apply-button artdeco-button--primary" aria-label="Easy Apply to Python Developer" id="apply">Easy Apply</button>
+<div id="job-details">We build Python services with FastAPI and PostgreSQL.</div>
+<div id="sent" class="hidden">Your application was sent to Example Company</div>
+
+<div id="modal" class="jobs-easy-apply-modal hidden" role="dialog">
+  <button aria-label="Dismiss" class="artdeco-modal__dismiss" id="dismiss">x</button>
+
+  <div class="step" data-step="1">
+    <div class="fb-dash-form-element">
+      <label for="first">First name</label>
+      <input id="first" type="text" value="Anna" required>
+    </div>
+    <div class="fb-dash-form-element">
+      <label for="cc">Phone country code</label>
+      <select id="cc" required>
+        <option>Select an option</option>
+        <option>Estonia (+372)</option>
+        <option>Latvia (+371)</option>
+      </select>
+    </div>
+    <div class="fb-dash-form-element">
+      <label for="phone">Mobile phone number</label>
+      <input id="phone" type="text" required>
+    </div>
+  </div>
+
+  <div class="step hidden" data-step="2">
+    <div class="fb-dash-form-element">
+      <label for="jobs-document-upload-file-input-upload-resume">Upload resume</label>
+      <input id="jobs-document-upload-file-input-upload-resume" type="file">
+    </div>
+  </div>
+
+  <div class="step hidden" data-step="3">
+    <div class="fb-dash-form-element">
+      <label for="numeric-python">How many years of work experience do you have with Python?</label>
+      <input id="numeric-python" type="text" required>
+    </div>
+    <fieldset class="fb-dash-form-element">
+      <legend>Are you legally authorized to work in Latvia?</legend>
+      <input type="radio" name="auth" id="auth-yes" value="Yes" required><label for="auth-yes">Yes</label>
+      <input type="radio" name="auth" id="auth-no" value="No"><label for="auth-no">No</label>
+    </fieldset>
+    <div class="fb-dash-form-element">
+      <label for="english">What is your level of proficiency in English?</label>
+      <select id="english" required>
+        <option>Select an option</option>
+        <option>Native or bilingual</option>
+        <option>Professional working</option>
+        <option>Limited working</option>
+      </select>
+    </div>
+    <div class="fb-dash-form-element">
+      <label for="cover">Cover letter</label>
+      <textarea id="cover" required></textarea>
+    </div>
+    <div class="fb-dash-form-element">
+      <input type="checkbox" id="privacy" required><label for="privacy">I agree to the privacy policy *</label>
+    </div>
+  </div>
+
+  <div class="step hidden" data-step="4">
+    <h3>Review your application</h3>
+    <input type="checkbox" id="follow-company-checkbox" checked><label for="follow-company-checkbox">Follow Example Company to stay up to date with their page.</label>
+  </div>
+
+  <div class="artdeco-inline-feedback--error hidden" id="error"></div>
+  <footer>
+    <button class="artdeco-button--primary" id="next" aria-label="Continue to next step">Next</button>
+  </footer>
+</div>
+
+<div id="confirm" class="hidden" role="alertdialog">
+  <p>Save this application?</p>
+  <button id="discard">Discard</button>
+  <button id="save">Save</button>
+</div>
+
+<script>
+  let step = 1;
+  window.submitted = null;
+  window.discarded = false;
+  const modal = document.getElementById('modal');
+  const next = document.getElementById('next');
+  const error = document.getElementById('error');
+
+  function show(n) {
+    document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
+    if (n === 3) { next.textContent = 'Review'; next.setAttribute('aria-label', 'Review your application'); }
+    else if (n === 4) { next.textContent = 'Submit application'; next.setAttribute('aria-label', 'Submit application'); }
+    else { next.textContent = 'Next'; next.setAttribute('aria-label', 'Continue to next step'); }
+  }
+
+  function missing(n) {
+    const box = document.querySelector(`.step[data-step="${n}"]`);
+    const bad = [];
+    box.querySelectorAll('input[required], select[required]').forEach(el => {
+      if (el.type === 'radio') {
+        if (!box.querySelector(`input[name="${el.name}"]:checked`)) bad.push(el.name);
+      } else if (el.type === 'checkbox') {
+        if (!el.checked) bad.push(el.id);
+      } else if (el.tagName === 'SELECT') {
+        if (el.selectedIndex === 0) bad.push(el.id);
+      } else if (!el.value.trim()) bad.push(el.id);
+    });
+    if (n === 2 && !document.getElementById('jobs-document-upload-file-input-upload-resume').files.length) bad.push('resume');
+    return bad;
+  }
+
+  document.getElementById('apply').addEventListener('click', () => { modal.classList.remove('hidden'); show(1); });
+  next.addEventListener('click', () => {
+    const bad = missing(step);
+    if (bad.length) { error.textContent = 'Please enter a valid answer: ' + bad.join(', '); error.classList.remove('hidden'); return; }
+    error.classList.add('hidden');
+    if (step === 4) {
+      window.submitted = {
+        phone: document.getElementById('phone').value,
+        cc: document.getElementById('cc').value,
+        python: document.getElementById('numeric-python').value,
+        auth: (document.querySelector('input[name=auth]:checked') || {}).value,
+        english: document.getElementById('english').value,
+        follow: document.getElementById('follow-company-checkbox').checked,
+        resume: document.getElementById('jobs-document-upload-file-input-upload-resume').files[0].name,
+      };
+      modal.classList.add('hidden');
+      document.getElementById('sent').classList.remove('hidden');
+      document.getElementById('apply').remove();
+      return;
+    }
+    step += 1;
+    show(step);
+  });
+  document.getElementById('dismiss').addEventListener('click', () => document.getElementById('confirm').classList.remove('hidden'));
+  document.getElementById('discard').addEventListener('click', () => {
+    window.discarded = true;
+    document.getElementById('confirm').classList.add('hidden');
+    modal.classList.add('hidden');
+  });
+</script>
+</body>
+</html>

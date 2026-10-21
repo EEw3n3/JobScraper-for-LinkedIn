@@ -1,0 +1,78 @@
+{
+  "basics": {
+    "name": "Anna Example",
+    "headline": "",
+    "email": "anna@example.com",
+    "phone": "20000000",
+    "location": "Riga, Latvia",
+    "website": {"url": "", "label": ""},
+    "customFields": []
+  },
+  "summary": {
+    "title": "Summary",
+    "hidden": false,
+    "content": "<p>Software developer who builds Python services and automates routine work. Built a REST API with FastAPI and a price monitoring tool that scrapes several online stores. Comfortable with SQL, Docker and Linux. Ready to learn whatever the team uses.</p>"
+  },
+  "sections": {
+    "profiles": {
+      "title": "Profiles",
+      "hidden": false,
+      "items": [
+        {"id": "p1", "hidden": false, "network": "LinkedIn", "username": "anna-example",
+         "website": {"url": "https://www.linkedin.com/in/anna-example", "label": "", "inlineLink": false}},
+        {"id": "p2", "hidden": false, "network": "GitHub", "username": "anna-example",
+         "website": {"url": "https://github.com/anna-example", "label": "", "inlineLink": false}}
+      ]
+    },
+    "experience": {
+      "title": "Experience",
+      "hidden": false,
+      "items": [
+        {
+          "id": "e1", "hidden": false,
+          "company": "Example SIA", "position": "Software Developer", "location": "Riga",
+          "period": "Oct 2024 - Present",
+          "description": "<ul><li>Maintain and debug the company's internal web app.</li><li>Built a REST API with FastAPI and PostgreSQL.</li><li>Automated weekly reports with Python and SQL.</li></ul>"
+        }
+      ]
+    },
+    "education": {
+      "title": "Education",
+      "hidden": false,
+      "items": [
+        {
+          "id": "ed1", "hidden": false,
+          "school": "Example Technical School", "degree": "Programming technician", "area": "",
+          "grade": "", "location": "Riga", "period": "2021 - 2025", "description": ""
+        }
+      ]
+    },
+    "projects": {
+      "title": "Projects",
+      "hidden": false,
+      "items": [
+        {
+          "id": "pr1", "hidden": false, "name": "Price Monitor", "period": "2025",
+          "description": "<ul><li>Scrapes prices from five online stores every day.</li><li>Runs in Docker on a Linux server.</li></ul>"
+        }
+      ]
+    },
+    "skills": {
+      "title": "Skills",
+      "hidden": false,
+      "items": [
+        {"id": "s1", "hidden": false, "name": "Backend", "keywords": ["Python", "FastAPI", "SQL", "PostgreSQL"]},
+        {"id": "s2", "hidden": false, "name": "Tools", "keywords": ["Docker", "Linux", "Git"]}
+      ]
+    },
+    "languages": {
+      "title": "Languages",
+      "hidden": false,
+      "items": [
+        {"id": "l1", "hidden": false, "language": "English", "fluency": "C1"},
+        {"id": "l2", "hidden": false, "language": "Latvian", "fluency": "Native"}
+      ]
+    },
+    "certifications": {"title": "Certifications", "hidden": false, "items": []}
+  }
+}

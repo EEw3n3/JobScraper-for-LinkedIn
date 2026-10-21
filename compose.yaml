@@ -1,0 +1,52 @@
+services:
+  jobparser:
+    image: jobparser:homelab
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${JOBPARSER_BIND_IP:-127.0.0.1}:8080:8080"
+      - "${JOBPARSER_BIND_IP:-127.0.0.1}:6080:6080"
+    environment:
+      JOBPARSER_RESULTS_DIR: /app/results
+      JOBPARSER_CV_DIR: /app/cv_storage
+      JOBPARSER_STATE_DIR: /app/web_state
+      JOBPARSER_WEB_HOST: 0.0.0.0
+      JOBPARSER_WEB_PORT: "8080"
+      JOBPARSER_WEB_USER: ${JOBPARSER_WEB_USER:-admin}
+      JOBPARSER_WEB_PASSWORD: ${JOBPARSER_WEB_PASSWORD:?Set JOBPARSER_WEB_PASSWORD in .env.homelab (at least 16 characters)}
+      JOBPARSER_NOVNC_URL: ${JOBPARSER_NOVNC_URL:-http://127.0.0.1:16080/vnc.html?autoconnect=true&resize=scale}
+      JOBPARSER_VNC_PASSWORD: ${JOBPARSER_VNC_PASSWORD:?Set JOBPARSER_VNC_PASSWORD in .env.homelab (at least 8 characters)}
+      JOBPARSER_INTERACTIVE_WAIT: ${JOBPARSER_INTERACTIVE_WAIT:-300}
+      JOBPARSER_HEADLESS: "1"
+      CHROME_BINARY: /usr/bin/chromium
+      CHROMEDRIVER_PATH: /usr/bin/chromedriver
+      JOBPARSER_CHROME_NO_SANDBOX: "1"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+    volumes:
+      - type: bind
+        source: ./results
+        target: /app/results
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./cv_storage
+        target: /app/cv_storage
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./web_state
+        target: /app/web_state
+        bind:
+          create_host_path: false

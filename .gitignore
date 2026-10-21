@@ -1,0 +1,30 @@
+# Python and tooling
+.venv/
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+
+# Secrets: API keys and Google OAuth files
+.env*
+!.env.example
+!.env.homelab.example
+secrets/
+
+# Personal data: your profile, CVs, letters, results and the LinkedIn browser profile
+config/applicant.json
+config/cover_letter_example.md
+cv_storage/*
+!cv_storage/base_cv.example.json
+cv.pdf
+results/
+web_state/
+browser_profile/
+*.db
+*.log
+
+# Build output
+build/
+dist/
+*.spec
+JobScraper.exe

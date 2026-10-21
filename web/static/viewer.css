@@ -1,0 +1,11 @@
+.viewer-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:30px}
+.novnc-link{display:block;margin-top:10px;color:var(--green);font-size:13px;font-weight:700;text-decoration:none;text-align:right}
+.viewer-heading>div{display:flex;gap:8px}
+.jobs-view{display:grid;gap:14px;margin-top:14px}
+.job-card{border-left:4px solid var(--green);background:#f5f5ee;padding:18px}
+.job-card h4{font-size:19px;margin:0 0 14px}
+.job-card h4 a{color:var(--green)}
+.job-field{display:grid;grid-template-columns:minmax(110px,160px) 1fr;gap:14px;border-top:1px solid var(--line);padding:9px 0}
+.job-field strong{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.job-field p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:700px){.job-field{grid-template-columns:1fr;gap:3px}.viewer-heading{align-items:flex-start;flex-direction:column}}

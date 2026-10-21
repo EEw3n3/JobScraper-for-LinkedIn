@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Job Application for Software Engineer at Example</title>
+<style>.listbox { border: 1px solid #999; margin: 0; padding: 0; list-style: none; } .listbox li { padding: 4px; }</style>
+</head>
+<body>
+<!-- Offline imitation of a job-boards.greenhouse.io form: labelled inputs and react-select style
+     comboboxes whose options only exist in the DOM while the list is open. -->
+<h1>Software Engineer</h1>
+<form id="application-form">
+  <div class="field"><label for="first_name">First Name<span class="asterisk">*</span></label><input id="first_name" type="text" aria-required="true"></div>
+  <div class="field"><label for="last_name">Last Name<span class="asterisk">*</span></label><input id="last_name" type="text" aria-required="true"></div>
+  <div class="field"><label for="email">Email<span class="asterisk">*</span></label><input id="email" type="email" aria-required="true"></div>
+  <div class="field"><label for="phone">Phone</label><input id="phone" type="tel"></div>
+  <div class="field file-upload">
+    <label for="resume" id="upload-label-resume">Resume/CV<span class="asterisk">*</span></label>
+    <button type="button" onclick="document.getElementById('resume').click()">Attach</button>
+    <input id="resume" type="file" class="visually-hidden" style="position:absolute;width:1px;height:1px;opacity:0" aria-required="true">
+  </div>
+  <div class="field"><label for="question_1">LinkedIn Profile</label><input id="question_1" type="text"></div>
+  <div class="field">
+    <label for="question_2" id="question_2-label">Are you legally authorized to work in Latvia?<span class="asterisk">*</span></label>
+    <div class="select__control"><input id="question_2" role="combobox" aria-controls="question_2-listbox" aria-expanded="false" aria-required="true" autocomplete="off"><span class="select__value"></span></div>
+  </div>
+  <div class="field">
+    <label for="question_3" id="question_3-label">Will you now or in the future require visa sponsorship?<span class="asterisk">*</span></label>
+    <div class="select__control"><input id="question_3" role="combobox" aria-controls="question_3-listbox" aria-expanded="false" aria-required="true" autocomplete="off"><span class="select__value"></span></div>
+  </div>
+  <div class="field"><label for="question_4">How did you hear about this job?</label><input id="question_4" type="text"></div>
+  <div class="field">
+    <label for="gender" id="gender-label">Gender</label>
+    <div class="select__control"><input id="gender" role="combobox" aria-controls="gender-listbox" aria-expanded="false" autocomplete="off"><span class="select__value"></span></div>
+  </div>
+  <div class="error-message" role="alert" id="error" hidden></div>
+  <button type="submit">Submit application</button>
+</form>
+<div id="done" hidden><h2>Thank you for applying.</h2></div>
+<script>
+  const OPTIONS = {question_2: ['Yes', 'No'], question_3: ['Yes', 'No'],
+                   gender: ['Male', 'Female', 'Decline To Self Identify']};
+  const chosen = {};
+  for (const [id, options] of Object.entries(OPTIONS)) {
+    const input = document.getElementById(id);
+    input.addEventListener('click', () => {
+      document.querySelectorAll('.listbox').forEach(list => list.remove());
+      const list = document.createElement('ul');
+      list.className = 'listbox'; list.id = id + '-listbox'; list.setAttribute('role', 'listbox');
+      for (const text of options) {
+        const item = document.createElement('li');
+        item.setAttribute('role', 'option'); item.textContent = text;
+        item.addEventListener('click', () => {
+          chosen[id] = text; input.nextElementSibling.textContent = text; list.remove();
+          input.setAttribute('aria-expanded', 'false');
+        });
+        list.appendChild(item);
+      }
+      input.parentElement.after(list);
+      input.setAttribute('aria-expanded', 'true');
+    });
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.listbox').forEach(l => l.remove()); });
+  }
+  window.submitted = null;
+  document.getElementById('application-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const missing = ['first_name', 'last_name', 'email'].filter(id => !document.getElementById(id).value);
+    if (!document.getElementById('resume').files.length) missing.push('resume');
+    for (const id of ['question_2', 'question_3']) if (!chosen[id]) missing.push(id);
+    if (missing.length) { const el = document.getElementById('error'); el.textContent = 'Required: ' + missing.join(', '); el.hidden = false; return; }
+    window.submitted = {first: first_name.value, last: last_name.value, email: email.value, phone: phone.value,
+                        linkedin: question_1.value, heard: question_4.value, resume: resume.files[0].name, ...chosen};
+    document.getElementById('application-form').hidden = true;
+    document.getElementById('done').hidden = false;
+  });
+</script>
+</body>
+</html>

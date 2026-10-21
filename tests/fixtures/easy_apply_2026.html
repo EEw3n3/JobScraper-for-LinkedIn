@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Datu analītiķis | Example SIA | LinkedIn</title>
+</head>
+<body>
+<!-- Offline imitation of LinkedIn's 2026 Easy Apply: generated class names, a native <dialog>,
+     Russian interface and a resume button that creates its file input only when clicked. -->
+<a href="/company/example/">Example SIA</a>
+<button type="button" class="hv4lac hv4lab" aria-label="Воспользуйтесь опцией простой подачи заявки на эту вакансию">Простая подача заявки</button>
+<div id="sent" hidden>Ваша заявка отправлена в компанию Example SIA</div>
+
+<dialog data-testid="dialog" aria-labelledby="dialog-header" id="modal">
+  <button type="button" aria-label="Пропустить" id="close">×</button>
+  <header><h2 id="dialog-header">Подать заявку в компанию Example SIA</h2></header>
+  <div>
+    <label for="_r_7_">Email*</label>
+    <select id="_r_7_" required><option value=""></option><option value="anna@example.test" selected>anna@example.test</option></select>
+  </div>
+  <div>
+    <label for="_r_9_">Телефонный код страны*</label>
+    <select id="_r_9_" required>
+      <option value=""></option>
+      <option value="lt">Литва (+370)</option>
+      <option value="lv">Латвия (+371)</option>
+    </select>
+  </div>
+  <div>
+    <label for="_r_b_">Phone*</label>
+    <input id="_r_b_" type="tel" required value="">
+  </div>
+  <div>
+    <h3>Resume</h3>
+    <p>Выберите или загрузите резюме в формате DOC, DOCX или PDF</p>
+    <fieldset role="radiogroup" id="resumes"></fieldset>
+    <button type="button" id="upload">Загрузить резюме</button>
+  </div>
+  <div>
+    <!-- As on LinkedIn: the real input is invisible, the label is an empty drawn box, the text is a sibling. -->
+    <input id="_r_d_" type="checkbox" checked style="opacity: 0; position: absolute">
+    <label for="_r_d_" style="display: inline-block; width: 16px; height: 16px; border: 1px solid #333"></label>
+    <span>Отслеживайте компанию Example SIA, чтобы быть в курсе новостей на ее странице</span>
+  </div>
+  <p id="error" class="artdeco-inline-feedback--error" hidden></p>
+  <button type="button" id="submit">Отправить заявку</button>
+</dialog>
+
+<dialog id="confirm">
+  <p>Сохранить эту заявку?</p>
+  <button type="button" id="discard">Не сохранять</button>
+  <button type="button" id="save">Сохранить</button>
+</dialog>
+
+<script>
+  window.submitted = null;
+  window.discarded = false;
+  const modal = document.getElementById('modal');
+  document.querySelector('[aria-label*="простой подачи"]').addEventListener('click', () => modal.show());
+
+  document.getElementById('upload').addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.doc,.docx';
+    input.onchange = () => {
+      const name = input.files[0].name;
+      const box = document.getElementById('resumes');
+      box.innerHTML = `<input type="radio" name="resume" id="resume-1" checked><label for="resume-1">${name}</label>`;
+    };
+    input.click();
+  });
+
+  document.getElementById('submit').addEventListener('click', () => {
+    const error = document.getElementById('error');
+    const missing = [];
+    if (!document.getElementById('_r_b_').value.trim()) missing.push('phone');
+    if (!document.getElementById('_r_9_').value) missing.push('country code');
+    if (!document.querySelector('input[name=resume]:checked')) missing.push('resume');
+    if (missing.length) { error.textContent = 'Укажите: ' + missing.join(', '); error.hidden = false; return; }
+    window.submitted = {
+      phone: document.getElementById('_r_b_').value,
+      code: document.getElementById('_r_9_').value,
+      resume: document.querySelector('label[for=resume-1]').textContent,
+      follow: document.getElementById('_r_d_').checked,
+    };
+    modal.close();
+    document.getElementById('sent').hidden = false;
+  });
+
+  document.getElementById('close').addEventListener('click', () => document.getElementById('confirm').show());
+  document.getElementById('discard').addEventListener('click', () => {
+    window.discarded = true;
+    document.getElementById('confirm').close();
+    modal.close();
+  });
+</script>
+</body>
+</html>

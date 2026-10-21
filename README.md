@@ -1,4 +1,4 @@
-# JobScraper
+# JobScraper for LinkedIn
 
 A Windows desktop tool for a job search on LinkedIn. It collects fresh vacancies for the roles you
 choose, scores each one against your CV with Google Gemini, tailors your CV and a cover letter to the
@@ -55,8 +55,8 @@ cover letter tailoring, Easy Apply and employer-site applications, and Gmail sor
 Open PowerShell and run:
 
 ```powershell
-git clone https://github.com/<your-name>/JobScraper.git
-cd JobScraper
+git clone https://github.com/EEw3n3/JobScraper-for-LinkedIn.git
+cd JobScraper-for-LinkedIn
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-app.txt
 ```

@@ -103,13 +103,16 @@ class Api:
             "gmail": (ROOT / "secrets" / "gmail_token.json").exists(),
         }
 
-    def start(self, dry_run=False, skip_scrape=False):
+    def start(self, dry_run=False, skip_scrape=False, mail_only=False):
         if self.process is not None and self.process.poll() is None:
             return {"ok": False, "error": "A run is already in progress"}
         if not PYTHON.exists():
             return {"ok": False, "error": f"Python environment not found: {PYTHON}"}
         argv = [str(PYTHON), "-u", "main.py", "run-all"]
-        if dry_run:
+        if mail_only:
+            # Only sorts Gmail: nothing is collected, scored or sent.
+            argv.append("--mail-only")
+        elif dry_run:
             argv.append("--dry-run")
         if skip_scrape:
             argv.append("--skip-scrape")

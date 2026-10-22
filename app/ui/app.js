@@ -108,9 +108,13 @@ function setRunning(running, label) {
   state.running = running;
   $("start-btn").classList.toggle("running", running);
   $("start-label").textContent = running ? "Stop" : "Start";
-  $("launch-title").textContent = running ? "Working on applications" : label === "done" ? "Run finished"
+  $("mail-btn").disabled = running;
+  $("launch-title").textContent = running ? (state.mailOnly ? "Checking mail" : "Working on applications")
+    : label === "done" ? "Run finished"
     : label === "error" ? "Run stopped" : "Ready to look for jobs";
-  $("launch-sub").textContent = running
+  $("launch-sub").textContent = running && state.mailOnly
+    ? "Only sorting Gmail into labels. Nothing is sent."
+    : running
     ? "You can minimise the window: progress is shown below, and jobs that need you appear on the right."
     : "Collects fresh jobs, scores them against your CV and applies to the best ones.";
   document.querySelectorAll(".modes input, #dry-run").forEach((el) => (el.disabled = running));
@@ -153,6 +157,9 @@ function handle(event) {
       log(`→ ${STATUS_TEXT[event.status] || event.status}: ${event.title}${event.company ? " · " + event.company : ""}`);
       refreshLists();
       break;
+    case "mail":
+      state.mailCounts = event;
+      break;
     case "log":
       log(event.text);
       break;
@@ -173,7 +180,14 @@ function stageSummary(event) {
   if (event.stage === "parse") return `Read: ${event.total ?? 0}`;
   if (event.stage === "analyze") return `Scored: ${(event.analyzed || 0) + (event.skipped || 0)}${event.failed ? `, ${event.failed} failed` : ""}`;
   if (event.stage === "apply") return `Submitted: ${(event.applied || 0) + (event.unconfirmed || 0)}`;
+  if (event.stage === "mail" && state.mailCounts) return `Offers: ${state.mailCounts.offer || 0}, rejections: ${state.mailCounts.rejection || 0}`;
   return "Done";
+}
+
+function mailSummary() {
+  const m = state.mailCounts || {};
+  return `Mail checked: ${m.offer || 0} offers and invitations, ${m.rejection || 0} rejections, ` +
+    `${m.applied || 0} application confirmations. Nothing was sent.`;
 }
 
 function log(text) {
@@ -194,6 +208,7 @@ function finish(code) {
   renderStages();
   setPercent(code === 0 || code === 2 ? 100 : overallPercent());
   setNow(stopped ? "Stopped. Collected data is saved; the next run continues from here." :
+    state.mailOnly ? (code === 0 ? mailSummary() : "Could not check mail, see the log") :
     code === 0 || code === 2 ? `Done: ${state.counts.applied} submitted, ${state.counts.manual} need you` :
     "The run ended with an error, see the log");
   refreshLists();
@@ -218,6 +233,7 @@ async function toggleRun() {
   }
   const mode = document.querySelector("input[name=mode]:checked").value;
   const dryRun = $("dry-run").checked;
+  state.mailOnly = false;
   resetProgress();
   if (mode === "apply") {
     for (const id of ["collect", "parse", "analyze", "mail"]) state.stages[id].status = "skipped";
@@ -227,6 +243,20 @@ async function toggleRun() {
   if (!result.ok) { toast(result.error); return; }
   setRunning(true);
   setNow(mode === "apply" ? "Opening LinkedIn to apply…" : "Opening LinkedIn and searching for jobs…");
+}
+
+// Only sorts Gmail (offers, rejections, confirmations): nothing is collected, scored or sent.
+async function checkMail() {
+  if (state.running) return;
+  state.mailOnly = true;
+  state.mailCounts = null;
+  resetProgress();
+  for (const id of ["collect", "parse", "analyze", "apply"]) state.stages[id].status = "skipped";
+  renderStages();
+  const result = await api().start(false, false, true);
+  if (!result.ok) { state.mailOnly = false; toast(result.error); return; }
+  setRunning(true);
+  setNow("Sorting mail: offers, rejections, applications…");
 }
 
 // ---------- lists ----------------------------------------------------------------------
@@ -313,6 +343,7 @@ async function refreshFacts() {
   let html = facts.map((f) => `<span class="fact">${escapeHtml(f)}</span>`).join("");
   if (!s.signed_in) html += `<span class="fact warn">Not signed in to LinkedIn: run main.py login</span>`;
   if (!s.gmail) html += `<span class="fact warn">Gmail is not connected</span>`;
+  $("mail-btn").disabled = state.running || !s.gmail;
   if (!s.auto_submit) html += `<span class="fact warn">Auto-submit is off: applications are only filled in</span>`;
   if (!s.ready) html += `<span class="fact warn">Python environment not found: ${escapeHtml(s.root)}</span>`;
   $("facts").innerHTML = html;
@@ -339,6 +370,7 @@ window.addEventListener("pywebviewready", async () => {
   resetProgress();
   setNow("Waiting to start");
   $("start-btn").addEventListener("click", toggleRun);
+  $("mail-btn").addEventListener("click", checkMail);
   $("folder-btn").addEventListener("click", () => { if (state.root) api().open_path(state.root + "\\results"); });
   $("report-btn").addEventListener("click", async () => { if (!(await api().open_report())) toast("No report yet"); });
   $("auto-submit").addEventListener("change", async (e) => {

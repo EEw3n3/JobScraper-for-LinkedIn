@@ -30,17 +30,23 @@
           </div>
         <p id="launch-sub">Collects fresh jobs, scores them against your CV and applies to the best ones.</p>
       </div>
+      <div class="actions">
+      <button class="secondary mail-btn" id="mail-btn" title="Only sort Gmail: offers, rejections, confirmations. Sends nothing.">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6.5h16v11H4z M4.5 7l7.5 6 7.5-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        <span>Check mail</span>
+      </button>
       <button class="start" id="start-btn">
         <svg aria-hidden="true" class="icon-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
         <svg aria-hidden="true" class="icon-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/></svg>
         <span id="start-label">Start</span>
       </button>
+      </div>
     </header>
 
     <div class="controls">
       <div class="modes" role="radiogroup" aria-label="Mode">
         <label class="seg"><input type="radio" name="mode" value="full" checked><span>Full run</span></label>
-        <label class="seg"><input type="radio" name="mode" value="apply"><span>Applications only</span></label>
+        <label class="seg"><input type="radio" name="mode" value="apply"><span>Send applications</span></label>
       </div>
       <div class="switches">
         <label class="switch"><input type="checkbox" id="dry-run"><span class="track"></span>

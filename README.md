@@ -204,7 +204,8 @@ You can also pass `--role` and `--country` to `scrape` for a single run.
 
 **Desktop app.** Open `JobScraper.exe`, keep "Dry run" ticked for the first runs and click Start.
 A full run collects jobs, reads descriptions, scores them, sorts Gmail (if connected) and applies.
-"Applications only" skips collection. Jobs the tool could not finish appear under "Needs you" with
+"Send applications" skips collection and applies to the newest collected jobs. "Check mail" only sorts
+Gmail replies (offers, rejections, confirmations) and sends nothing. Jobs the tool could not finish appear under "Needs you" with
 the reason, an AI summary of the job and what to do; mark them "I applied myself" when done. The
 "Auto-submit" switch writes `auto_submit` to `config\applicant.json`.
 

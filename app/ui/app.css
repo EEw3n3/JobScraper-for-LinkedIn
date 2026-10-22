@@ -292,3 +292,10 @@ button.ok:hover { background: #213434; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* "Check mail" sits beside the start button: same height, quieter. */
+.actions { flex: none; display: inline-flex; align-items: center; gap: 10px; }
+.mail-btn { height: 40px; gap: 8px; padding: 0 16px 0 14px; }
+.mail-btn svg { width: 16px; height: 16px; }
+.mail-btn:disabled { opacity: .45; cursor: default; }
+.mail-btn:disabled:hover { background: none; }

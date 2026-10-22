@@ -100,6 +100,8 @@ def build_parser():
     run_all = commands.add_parser("run-all", help="Collect, score, sort mail and apply in one go (the desktop app's run)")
     run_all.add_argument("--dry-run", action="store_true", help="Fill applications but stop before Submit")
     run_all.add_argument("--skip-scrape", action="store_true", help="Only apply to the newest collected jobs")
+    run_all.add_argument("--mail-only", action="store_true",
+                         help="Only sort replies in Gmail (offers, rejections); applies and sends nothing")
     explain = commands.add_parser("explain", help="Short AI summary of a stopped application and what to do")
     explain.add_argument("--link", required=True)
     hide = commands.add_parser("hide", help="Hide a stopped application from the app's to-do list")
@@ -151,6 +153,22 @@ def mark_applied_command(args):
 def run_all_command(args):
     """The whole daily run, step by step; a failed step is reported and the next one still runs."""
     progress.emit("run", state="start", dry_run=args.dry_run)
+    if args.mail_only:
+        for name in ("collect", "parse", "analyze", "apply"):
+            progress.stage(name, "skipped")
+        if not (BASE_DIR / "secrets" / "gmail_token.json").exists():
+            progress.stage("mail", "error", message="Gmail is not connected")
+            progress.emit("run", state="done", error="Gmail is not connected")
+            return 1
+        try:
+            main(["mail"])
+        except Exception as error:
+            progress.stage("mail", "error", message=str(error))
+            print(f"Error in mail: {error}", file=sys.stderr)
+            progress.emit("run", state="done", error=str(error))
+            return 1
+        progress.emit("run", state="done")
+        return 0
     steps = []
     if not args.skip_scrape:
         scrape = ["scrape", "--headless", "--browsers", "1"]
@@ -352,8 +370,8 @@ def mail_command(args):
         counts = sort_mail(service, days=args.days, limit=args.limit, dry_run=args.dry_run, move=args.move)
         print(f"Gmail: {counts}{' (dry run, nothing changed)' if args.dry_run else ''}")
         progress.emit("mail", **counts)
-    progress.step("mail", 1, 2, "Adding the list of found jobs to Gmail")
     if args.digest_db:
+        progress.step("mail", 1, 2, "Adding the list of found jobs to Gmail")
         path = args.digest_db.resolve()
         if not path.is_file():
             raise RuntimeError(f"Database does not exist: {path}")

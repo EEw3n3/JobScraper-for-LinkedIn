@@ -255,7 +255,7 @@ def explain_command(args):
             result["note"] = f"AI unavailable: {error}"
         text = json.dumps(result, ensure_ascii=False)
         if "note" not in result:
-            log.save(args.link, explain=text)
+            log.save(args.link, touch=False, explain=text)
         print(text)
         return 0
     finally:
@@ -267,7 +267,12 @@ def hide_command(args):
 
     log = ApplicationLog(BASE_DIR / "results" / "applications.db")
     try:
-        log.save(args.link, status="hidden")
+        hidden_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        if log.status(args.link) in ("applied", "unconfirmed", "already_applied", "hold"):
+            # A sent application only leaves the app's list; its status still guards against applying twice.
+            log.save(args.link, touch=False, hidden_at=hidden_at)
+        else:
+            log.save(args.link, touch=False, status="hidden", hidden_at=hidden_at)
     finally:
         log.close()
     return 0
@@ -390,7 +395,7 @@ def mail_command(args):
 
 
 def initialize_searches(db, args):
-    from config.settings import SEARCH_LOCATIONS, SEARCH_ROLES
+    from config.settings import LOCAL_LOOKBACK_HOURS, SEARCH_LOCATIONS, SEARCH_ROLES
 
     roles = args.role or [unquote(role) for role in SEARCH_ROLES]
     locations = args.country or SEARCH_LOCATIONS + ["Europe (Remote)"]
@@ -398,8 +403,9 @@ def initialize_searches(db, args):
         for role in roles:
             for location in locations:
                 remote = location == "Europe (Remote)"
+                hours = args.lookback_hours if remote else max(args.lookback_hours, LOCAL_LOOKBACK_HOURS)
                 query = {"keywords": role, "location": "Europe" if remote else location,
-                         "f_TPR": f"r{args.lookback_hours * 3600}"}
+                         "f_TPR": f"r{hours * 3600}"}
                 if remote:
                     query["f_WT"] = "2"
                 site = {"source": "LinkedIn", "country": location,

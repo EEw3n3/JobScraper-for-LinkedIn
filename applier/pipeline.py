@@ -36,7 +36,7 @@ class ApplicationLog:
                 "score INTEGER, status TEXT, reason TEXT, answers TEXT, cv_pdf TEXT, screenshot TEXT, notes TEXT, "
                 "updated_at TEXT)")
             existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(applications)")}
-            for column in ("apply_url", "ats", "explain"):
+            for column in ("apply_url", "ats", "explain", "hidden_at"):
                 if column not in existing:
                     self.conn.execute(f"ALTER TABLE applications ADD COLUMN {column} TEXT")
 
@@ -44,8 +44,10 @@ class ApplicationLog:
         row = self.conn.execute("SELECT status FROM applications WHERE link=?", (link,)).fetchone()
         return row["status"] if row else None
 
-    def save(self, link, **fields):
-        fields["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    def save(self, link, touch=True, **fields):
+        """touch=False keeps updated_at, the date the app shows for the application."""
+        if touch:
+            fields["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         columns = ["link", *fields]
         with self.conn:
             self.conn.execute(
@@ -91,7 +93,16 @@ def candidates(job_rows, log, min_score, submit, retry=False):
         if status in DONE or (status in RETRY_ONLY and not retry) or (status == "ready" and not submit and not retry):
             continue
         picked.append(row)
-    return sorted(picked, key=lambda row: -row["match_score"])
+    # Locations in their SEARCH_LOCATIONS order, remote jobs last; the best score first within each.
+    return sorted(picked, key=lambda row: (region_rank(row), -row["match_score"]))
+
+
+def region_rank(row, locations=None):
+    if locations is None:
+        from config.settings import SEARCH_LOCATIONS as locations
+    order = [location.replace("%20", " ").lower() for location in locations]
+    country = (row.get("country") or "").lower()
+    return order.index(country) if country in order else len(order)
 
 
 def slug(text):

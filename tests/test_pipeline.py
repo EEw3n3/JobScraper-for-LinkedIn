@@ -35,6 +35,15 @@ class PipelineTests(unittest.TestCase):
         picked = pipeline.candidates(rows, self.log, 60, submit=True)
         self.assertEqual([row["link"] for row in picked], ["b", "a"])
 
+    def test_candidates_follow_location_priority(self):
+        rows = [dict(job("remote", 95), country="Europe (Remote)"), dict(job("ee", 70), country="Estonia"),
+                dict(job("lv", 66), country="Latvia"), dict(job("lt", 90), country="Lithuania")]
+        self.assertEqual(pipeline.region_rank(rows[1], ["Latvia", "Estonia"]), 1)
+        self.assertEqual(pipeline.region_rank(rows[0], ["Latvia", "Estonia"]), 2)
+        with patch("config.settings.SEARCH_LOCATIONS", ["Latvia", "Lithuania", "Estonia"]):
+            picked = pipeline.candidates(rows, self.log, 60, submit=True)
+        self.assertEqual([row["link"] for row in picked], ["lv", "lt", "ee", "remote"])
+
     def test_ready_jobs_wait_for_submit_mode(self):
         self.log.save("a", status="ready")
         self.log.save("b", status="needs_manual")

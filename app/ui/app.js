@@ -265,33 +265,70 @@ async function refreshLists() {
   state.items = manual;
   $("manual-count").textContent = manual.length;
   $("applied-count").textContent = applied.length;
-  $("manual-list").innerHTML = manual.length ? manual.map((item, i) => `
+  $("manual-list").innerHTML = manual.length ? byDay(manual, (item, i) => `
     <div class="job">
       <div class="job-top"><div><div class="job-company">${escapeHtml(item.company || "Company")}</div>
         <div class="job-title">${escapeHtml(item.title)}</div></div>
         ${item.score ? `<span class="score">${item.score}</span>` : ""}</div>
-      <span class="chip">${escapeHtml(item.label)}</span>
+      <div class="job-meta"><span class="chip">${escapeHtml(item.label)}</span>
+        <span class="meta">${escapeHtml(formatTime(item.updated))}</span></div>
       <div class="job-reason">${escapeHtml(item.reason)}</div>
       <div class="job-actions"><button class="primary small" data-open="${i}">Details</button>
-        <button class="secondary small" data-url="${escapeHtml(item.apply_url || item.link)}">${item.apply_url ? "Open the form" : "Open the job"}</button></div>
-    </div>`).join("") :
+        <button class="secondary small" data-url="${escapeHtml(item.apply_url || item.link)}">${item.apply_url ? "Open the form" : "Open the job"}</button>
+        ${hideButton(item)}</div>
+    </div>`) :
     `<div class="empty"><div class="big">Nothing needs you right now</div>Jobs where the app stopped and needs you will appear here.</div>`;
-  $("applied-list").innerHTML = applied.length ? applied.map((item) => `
+  $("applied-list").innerHTML = applied.length ? byDay(applied, (item) => `
     <div class="job">
       <div class="job-top"><div><div class="job-company">${escapeHtml(item.company || "Company")}</div>
         <div class="job-title">${escapeHtml(item.title)}</div></div>
         ${item.score ? `<span class="score">${item.score}</span>` : ""}</div>
-      <span class="chip ok">${item.manual ? "Applied myself" : "Submitted by the app"}</span>
-      <div class="meta" style="margin-top:8px">${escapeHtml(formatDate(item.updated))}${item.ats ? " · " + escapeHtml(item.ats) : ""}</div>
-      <div class="job-actions" style="margin-top:10px"><button class="secondary small" data-url="${escapeHtml(item.link)}">Job</button>
-        ${item.cv_pdf ? `<button class="secondary small" data-path="${escapeHtml(item.cv_pdf)}">CV</button>` : ""}</div>
-    </div>`).join("") : `<div class="empty"><div class="big">No applications submitted yet</div>They will appear here after the first run.</div>`;
+      <div class="job-meta"><span class="chip ok">${item.manual ? "Applied myself" : "Submitted by the app"}</span>
+        <span class="meta">${escapeHtml(formatTime(item.updated))}${item.ats ? " · " + escapeHtml(item.ats) : ""}</span></div>
+      <div class="job-actions" style="margin-top:12px"><button class="secondary small" data-url="${escapeHtml(item.link)}">Job</button>
+        ${item.cv_pdf ? `<button class="secondary small" data-path="${escapeHtml(item.cv_pdf)}">CV</button>` : ""}
+        ${hideButton(item)}</div>
+    </div>`) : `<div class="empty"><div class="big">No applications submitted yet</div>They will appear here after the first run.</div>`;
 }
 
-function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value.replace(" ", "T") + "Z");
-  return date.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+function hideButton(item) {
+  return `<button class="ghost small hide-btn" data-hide="${escapeHtml(item.link)}" title="Remove from the list">Hide</button>`;
+}
+
+// The lists are newest first; a heading opens each day, so the cards of one run stay together.
+function byDay(items, card) {
+  let day = null;
+  return items.map((item, i) => {
+    const label = formatDay(item.updated);
+    const head = label !== day ? `<div class="day">${escapeHtml(label)}</div>` : "";
+    day = label;
+    return head + card(item, i);
+  }).join("");
+}
+
+function parseDate(value) {
+  return value ? new Date(value.replace(" ", "T") + "Z") : null;
+}
+
+function formatDay(value) {
+  const date = parseDate(value);
+  if (!date) return "No date";
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return "Today";
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return date.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long" });
+}
+
+function formatTime(value) {
+  const date = parseDate(value);
+  return date ? date.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+async function hideJob(link) {
+  await api().hide(link);
+  toast("Hidden from the list");
+  refreshLists();
 }
 
 async function openDetails(index) {
@@ -352,9 +389,13 @@ async function refreshFacts() {
 
 // ---------- wiring ---------------------------------------------------------------------
 document.addEventListener("click", async (e) => {
-  const target = e.target.closest("[data-open],[data-url],[data-path],.tab");
+  const target = e.target.closest("[data-open],[data-url],[data-path],[data-hide],.tab");
   if (!target) return;
-  if (target.classList.contains("tab")) {
+  if (target.dataset.hide) {
+    // Take the card away at once; the database write runs a short Python command.
+    target.closest(".job").remove();
+    hideJob(target.dataset.hide);
+  } else if (target.classList.contains("tab")) {
     document.querySelectorAll(".tab").forEach((t) => {
       t.classList.toggle("active", t === target);
       t.setAttribute("aria-selected", String(t === target));
@@ -389,10 +430,10 @@ window.addEventListener("pywebviewready", async () => {
     toast("Marked as applied by you");
     closeModal(); refreshLists();
   });
-  $("m-hide").addEventListener("click", async () => {
-    await api().hide(state.selected.link);
-    toast("Hidden from the list");
-    closeModal(); refreshLists();
+  $("m-hide").addEventListener("click", () => {
+    const link = state.selected.link;
+    closeModal();
+    hideJob(link);
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
   await refreshFacts();

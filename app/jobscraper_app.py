@@ -79,6 +79,20 @@ def query(sql, args=()):
             return []
 
 
+def ensure_hidden_column():
+    """Databases from before the per-card Hide button lack hidden_at, and the list queries need it."""
+    if not APPLICATIONS.exists():
+        return
+    with closing(sqlite3.connect(APPLICATIONS)) as connection:
+        try:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+            if columns and "hidden_at" not in columns:
+                connection.execute("ALTER TABLE applications ADD COLUMN hidden_at TEXT")
+                connection.commit()
+        except sqlite3.OperationalError:
+            pass
+
+
 def first_line(text):
     return (text or "").strip().splitlines()[0].strip() if (text or "").strip() else ""
 
@@ -152,8 +166,9 @@ class Api:
 
     # ---- lists ------------------------------------------------------------------------
     def manual_list(self):
+        ensure_hidden_column()
         rows = query("SELECT * FROM applications WHERE status IN ('needs_manual', 'external') "
-                     "ORDER BY updated_at DESC LIMIT 200")
+                     "AND hidden_at IS NULL ORDER BY updated_at DESC LIMIT 200")
         items = []
         for row in rows:
             label, text = human_reason(row.get("reason"), row["status"])
@@ -164,8 +179,9 @@ class Api:
         return items
 
     def applied_list(self):
+        ensure_hidden_column()
         rows = query("SELECT * FROM applications WHERE status IN ('applied', 'unconfirmed') "
-                     "ORDER BY updated_at DESC LIMIT 200")
+                     "AND hidden_at IS NULL ORDER BY updated_at DESC LIMIT 200")
         return [{"link": r["link"], "title": first_line(r["title"]), "company": r.get("company") or "",
                  "score": r.get("score"), "updated": r.get("updated_at") or "", "ats": r.get("ats") or "",
                  "manual": (r.get("reason") or "") == "Applied manually", "cv_pdf": r.get("cv_pdf") or ""}

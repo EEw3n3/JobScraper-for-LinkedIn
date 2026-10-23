@@ -22,8 +22,11 @@ SEARCH_ROLES = [
     "System%20Administrator",
 ]
 
-# Riga (office or hybrid) is covered by Latvia; "Europe (Remote)" is added in main.py.
-SEARCH_LOCATIONS = ["Latvia"]
+# LinkedIn locations in order of priority: jobs from the first one are applied to first, then the next,
+# and the remote search across Europe (added in main.py) only fills the rest of the daily limit.
+SEARCH_LOCATIONS = ["Latvia", "Estonia", "Lithuania"]
+# Local markets post few jobs a day, so these searches look back further than the remote one.
+LOCAL_LOOKBACK_HOURS = 72
 
 SITES = [
     {

@@ -194,8 +194,11 @@ Edit `config\settings.py`:
 
 - `SEARCH_ROLES`: LinkedIn search phrases, URL-encoded (`%20` for a space), for example
   `"Python%20Developer"`.
-- `SEARCH_LOCATIONS`: LinkedIn locations, for example `"Latvia"` or `"Germany"`. A remote search
-  across Europe is always added.
+- `SEARCH_LOCATIONS`: LinkedIn locations in order of priority, for example
+  `["Latvia", "Estonia", "Lithuania"]`. Jobs from the first location are applied to first, then the
+  next one. A remote search across Europe is always added and only fills the rest of the daily limit.
+- `LOCAL_LOOKBACK_HOURS`: how far back the location searches look (72 hours by default, since local
+  markets post few jobs a day). The remote search uses `--lookback-hours` (24 by default).
 - `STOP_SENIOR_WORDS`: titles with these words are skipped (senior, lead, manager and so on).
 
 You can also pass `--role` and `--country` to `scrape` for a single run.

@@ -189,14 +189,14 @@ h1 { text-wrap: balance; font-size: 26px; font-weight: 600; letter-spacing: -.01
 .counter.warn:not(.zero) b { color: var(--warning); }
 .counter.warn .f-bar i { background: var(--warning); }
 
-.log-card { flex: 1; min-height: 120px; margin-top: var(--gap); padding: 16px 24px 18px; display: flex; flex-direction: column; }
-.log { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.log[open] { }
+/* The log keeps one height and scrolls inside, so a long run never stretches the page. */
+.log-card { flex: none; margin-top: var(--gap); padding: 16px 24px 18px; }
 .log summary { color: var(--text); cursor: pointer; font-size: 14px; font-weight: 600; width: max-content; }
 .log summary::marker { color: var(--muted); }
-.log pre { flex: 1; min-height: 0; background: #0e0d11; border-radius: 4px; padding: 12px 14px; margin: 12px 0 0;
-  overflow: auto; font: 12px/1.6 "Cascadia Mono", Consolas, monospace; color: var(--soft); white-space: pre-wrap; }
-.log pre:empty::before { content: "Здесь будет построчный журнал запуска."; color: var(--muted);
+.log pre { height: 220px; background: #0e0d11; border-radius: 4px; padding: 12px 14px; margin: 12px 0 0;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  font: 12px/1.6 "Cascadia Mono", Consolas, monospace; color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.log pre:empty::before { content: "The run log will appear here line by line."; color: var(--muted);
   font-family: "Public Sans", "Segoe UI", sans-serif; }
 
 /* ---------- lists ------------------------------------------------------------------- */
@@ -230,8 +230,16 @@ h1 { text-wrap: balance; font-size: 26px; font-weight: 600; letter-spacing: -.01
 .chip.ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
 .job-reason { color: var(--soft); font-size: 13px; margin: 8px 0 12px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.job-actions { display: flex; gap: 8px; }
-.meta { color: var(--muted); font-size: 12px; }
+.job-actions { display: flex; gap: 8px; align-items: center; }
+.meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.job-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* A quiet text action at the row's end, away from the two main buttons. */
+.job .hide-btn { margin-left: auto; color: var(--muted); }
+.job .hide-btn:hover { color: var(--text); }
+/* Day heading: the cards below it came from that day's runs. */
+.day { padding: 18px 0 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.day + .job { padding-top: 14px; }
 
 .primary, .secondary, button.ok, .ghost { display: inline-flex; align-items: center; height: var(--control-height);
   padding: 0 14px; border-radius: var(--radius-control); font-weight: 500; font-size: 13px; transition: background .15s, color .15s; }

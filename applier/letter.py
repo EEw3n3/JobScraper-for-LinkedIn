@@ -9,7 +9,7 @@ with the problems listed, and otherwise not used.
 import json
 import re
 
-from applier.cv import (BUZZWORDS, LANGUAGE_NAMES, TECH_TERMS, USER_COUNT, _tokens, clean, cv_plain_text,
+from applier.cv import (AGE, BUZZWORDS, LANGUAGE_NAMES, TECH_TERMS, USER_COUNT, _tokens, clean, cv_plain_text,
                         unsupported_terms)
 
 MAX_WORDS = 420
@@ -72,6 +72,8 @@ def letter_problems(text, cv, profile, title, company, description):
         problems.append("calls the candidate junior")
     if USER_COUNT.search(text):
         problems.append("mentions user numbers")
+    if AGE.search(text):
+        problems.append("mentions the candidate's age")
     if LANGUAGE_LEVEL.search(text):
         problems.append("states a language level (only \"native\" is allowed)")
     base ="\n".join((cv_plain_text(cv), json.dumps(profile, ensure_ascii=False), title or "", company or "",

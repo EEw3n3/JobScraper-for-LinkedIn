@@ -37,7 +37,7 @@ class CliTests(unittest.TestCase):
             return [self.job]
 
         arguments = ["scrape", "--output-dir", str(self.root), "--no-ai", "--role", "Engineer",
-                     "--country", "Test", "--browsers", "1", "--max-pages", "0"]
+                     "--country", "Test", "--browsers", "1", "--max-pages", "0", "--source", "linkedin"]
         with patch("scraper.driver.setup_driver", return_value=Mock()), patch("scraper.collector.collect_links", side_effect=collect), patch("scraper.parser.extract_job_details", return_value=self.detail), patch("utils.analyzer.analyze_jobs_with_cv") as analyze:
             self.assertEqual(self.invoke(arguments), 0)
             self.assertEqual(self.invoke(arguments), 0)
@@ -84,7 +84,8 @@ class CliTests(unittest.TestCase):
 
         with patch("scraper.driver.setup_driver", return_value=Mock()), patch("scraper.collector.collect_links", side_effect=collect):
             with self.assertRaisesRegex(RuntimeError, "Browser crashed"):
-                self.invoke(["scrape", "--output-dir", str(self.root), "--role", "Engineer", "--country", "Test", "--no-ai"])
+                self.invoke(["scrape", "--output-dir", str(self.root), "--role", "Engineer", "--country", "Test", "--no-ai",
+                             "--source", "linkedin"])
         path = next(self.root.glob("*.db"))
         db = JobDatabase(path)
         try:

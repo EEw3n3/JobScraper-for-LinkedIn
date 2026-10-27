@@ -2,6 +2,8 @@ import hashlib
 import os
 import sqlite3
 import threading
+from contextlib import closing
+from pathlib import Path
 
 from utils.validation import description_status
 
@@ -34,6 +36,8 @@ class JobDatabase:
             "analysis_attempts": "INTEGER NOT NULL DEFAULT 0",
             "first_seen_at": "TEXT", "last_seen_at": "TEXT",
             "description_hash": "TEXT", "analysis_key": "TEXT",
+            # 1 for a job the applicant picked himself (saved on cv.lv): applied to first, whatever its score.
+            "pinned": "INTEGER NOT NULL DEFAULT 0",
         }
         with self._lock, self.conn:
             self.conn.execute("CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, link TEXT UNIQUE)")
@@ -137,6 +141,39 @@ class JobDatabase:
             raise ValueError("Analysis fields must be nonempty strings")
         with self._lock, self.conn:
             self._update_known("UPDATE jobs SET match_score=?, analysis_report=?, recommended_cv=?, cover_letter=?, analysis_key=?, analysis_status='analyzed', analysis_attempts=analysis_attempts+1, last_error=NULL WHERE link=?", (score, report, best_cv, cover_letter, analysis_key, link))
+
+    def pin(self, link):
+        with self._lock, self.conn:
+            self._update_known("UPDATE jobs SET pinned=1 WHERE link=?", (link,))
+
+    def adopt_analysis(self, older_path):
+        """Take scores from an earlier run's database for jobs whose title and description are unchanged.
+
+        The analyzer still compares analysis_key, so a changed CV, model or prompt scores them again.
+        Returns how many jobs took an earlier score.
+        """
+        try:
+            with closing(sqlite3.connect(f"{Path(older_path).resolve().as_uri()}?mode=ro", uri=True)) as older:
+                older.row_factory = sqlite3.Row
+                previous = {row["link"]: dict(row) for row in older.execute(
+                    "SELECT link, title, description_hash, match_score, analysis_report, recommended_cv, "
+                    "cover_letter, analysis_key FROM jobs WHERE analysis_status='analyzed' AND analysis_key IS NOT NULL")}
+        except sqlite3.Error:
+            return 0  # Not a job database, or one from before these columns existed.
+        adopted = 0
+        with self._lock, self.conn:
+            pending = self.conn.execute("SELECT link, title, description_hash FROM jobs "
+                                        "WHERE parse_status='parsed' AND analysis_status='pending'").fetchall()
+            for row in pending:
+                old = previous.get(row["link"])
+                if old and old["description_hash"] == row["description_hash"] and old["title"] == row["title"]:
+                    self.conn.execute(
+                        "UPDATE jobs SET match_score=?, analysis_report=?, recommended_cv=?, cover_letter=?, "
+                        "analysis_key=?, analysis_status='analyzed' WHERE link=?",
+                        (old["match_score"], old["analysis_report"], old["recommended_cv"], old["cover_letter"],
+                         old["analysis_key"], row["link"]))
+                    adopted += 1
+        return adopted
 
     def mark_analysis_error(self, link, error):
         with self._lock, self.conn:

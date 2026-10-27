@@ -67,6 +67,57 @@ class AnswerTests(unittest.TestCase):
         # "agree to relocate" is not a consent question.
         self.assertEqual(self.resolve("Do you agree to relocate to Berlin?", "choice", ["Yes", "No"]), ("No", "rule"))
 
+    def test_latvian_and_russian_fields(self):
+        cases = {
+            "Vārds": "Anna", "Uzvārds": "Test", "Vārds Uzvārds": "Anna Test", "Vārds, uzvārds": "Anna Test",
+            "E-pasta adrese": "anna@example.test", "E-PASTA ADRESE": "anna@example.test", "Tālruņa numurs": "20000000",
+            "Telefona numurs": "20000000", "Имя": "Anna", "Фамилия": "Test", "Имя и фамилия": "Anna Test",
+            "Электронная почта": "anna@example.test", "Номер телефона": "20000000", "Pilsēta": "Riga, Latvia",
+            "First name (As written in your passport)": "Anna", "Valsts": "Latvia",
+            "Vēlamais atalgojums (bruto, EUR)": 1800, "Ожидаемая зарплата": 1800,
+        }
+        for question, expected in cases.items():
+            with self.subTest(question):
+                self.assertEqual(self.resolve(question)[0], str(expected) if isinstance(expected, int) else expected)
+
+    def test_long_questions_are_not_contact_fields(self):
+        self.assertEqual(self.resolve("Do you have experience in mobile development for our clients?"), (None, None))
+        self.assertEqual(self.resolve("Phone number (with country code)")[0], "20000000")
+
+    def test_job_source_and_country_lists(self):
+        profile = {**PROFILE, "job_source": "cv.lv"}
+        self.assertEqual(self.resolve("Kā jūs uzzinājāt par vakanci?", profile=profile), ("cv.lv", "rule"))
+        self.assertEqual(self.resolve("How did you hear about us?", "choice", ["LinkedIn", "CV.lv", "Other"],
+                                      profile=profile), ("CV.lv", "rule"))
+        self.assertEqual(self.resolve("Country", "choice", ["Igaunija", "Latvija", "Lietuva"]), ("Latvija", "rule"))
+        self.assertEqual(self.resolve("Pilsēta", "choice", ["Daugavpils", "Rīga"]), ("Rīga", "rule"))
+        self.assertEqual(self.resolve("Phone country code", "choice", ["+372 Igaunija", "+371 Latvija"]),
+                         ("+371 Latvija", "rule"))
+
+    def test_language_levels_in_other_languages(self):
+        profile = {**PROFILE, "languages": {"English": "C1", "Latvian": "B2", "Russian": "Native"}}
+        self.assertEqual(self.resolve("Angļu valodas zināšanu līmenis", profile=profile)[0], "C1")
+        self.assertEqual(self.resolve("Уровень владения латышским языком", profile=profile)[0], "B2")
+        self.assertIsNone(self.resolve("What is your level of language skills?", profile=profile)[0])
+
+    def test_consent_scope_and_talent_pool(self):
+        accepting = {**PROFILE, "accept_application_consents": True}
+        options = ["I agree for my personal data to be used for this position only",
+                   "I agree for my personal data to be used for all suitable positions"]
+        self.assertEqual(self.resolve("Privacy", "choice", options, profile=accepting), (options[0], "profile"))
+        self.assertEqual(self.resolve("Vai vēlaties, lai jūsu dati tiek saglabāti nākotnes vakancēm?", "choice",
+                                      ["Jā", "Nē"], profile=accepting), ("Nē", "profile"))
+        self.assertEqual(self.resolve("Piekrītu personas datu apstrādei", "choice", ["Piekrītu", "Nepiekrītu"],
+                                      profile=accepting), ("Piekrītu", "profile"))
+
+    def test_workday_phone_lists_and_work_time(self):
+        self.assertEqual(self.resolve("Phone Device Type", "choice", ["Landline", "Mobile"]), ("Mobile", "rule"))
+        self.assertEqual(self.resolve("Country Phone Code", "choice", ["Lithuania (+370)", "Latvia (+371)"]),
+                         ("Latvia (+371)", "rule"))
+        self.assertEqual(self.resolve("+371"), ("20000000", "rule"))
+        self.assertEqual(self.resolve("Would you like to work full time or part time?", "choice",
+                                      ["Full time", "Part time"]), ("Full time", "rule"))
+
     def test_match_option(self):
         self.assertEqual(answers.match_option("yes", ["Yes, I am", "No"]), "Yes, I am")
         self.assertEqual(answers.match_option("Jā", ["Jā", "Nē"]), "Jā")

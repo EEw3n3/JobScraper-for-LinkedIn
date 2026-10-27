@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="lv">
+<head><meta charset="utf-8"><title>cv.lv apply form (signed in)</title></head>
+<body>
+<!-- An imitation of cv.lv's apply sidebar for a signed-in applicant: steps 1-2 (e-mail, name) are done
+     by the account, step 3 takes the CV and an optional letter, step 4 the employer's questions. -->
+<button type="button" id="opener">Pieteikties</button>
+<div id="slot"></div>
+<script>
+  window.submitted = null;
+  window.draftSaved = false;
+  const state = {step: 0, cv: null, letter: "-1", letterOpen: false,
+                 cvs: [["1707704", "CV.lv - Anna Test - 2"], ["old-file", "Anna-Test-CV.pdf"]],
+                 letters: [["-1", "Turpināt bez pieteikuma vēstules"], ["old-letter", "Anna_Motivation_Letter.pdf"]]};
+
+  function radios(name, items, chosen) {
+    return items.map(([value, text]) => `<label class="input-radio"><input type="radio" name="${name}" value="${value}"`
+      + `${value === chosen ? " checked" : ""}><span>${text}</span></label>`).join("");
+  }
+  function dropZone() {
+    return `<div class="drag-and-drop"><span>Ievilkt šeit vai</span> <label class="upload-label"><span>pārlūkot</span>`
+      + `<input type="file" id="file" name="file" style="display:none"></label><span>(Max 1 fails)</span></div>`;
+  }
+  function render() {
+    const slot = document.getElementById("slot");
+    if (state.step === 0) { slot.innerHTML = ""; return; }
+    if (state.step === 5) { slot.innerHTML = "<p>Jūsu pieteikums ir nosūtīts!</p>"; return; }
+    let content = "";
+    if (state.step === 3) {
+      content = `<div class="toggler"><button type="button"><h4><span>Pievienot CV</span>*</h4></button><div>`
+        + radios("cv", state.cvs, state.cv) + (state.cvs.length < 3 ? dropZone() : "") + `</div></div>`
+        + `<div class="toggler"><button type="button" id="letter-toggle"><h4><span>Izvēlieties pieteikumu</span></h4>`
+        + `<span>(Pēc izvēles)</span></button><div>`
+        + (state.letterOpen ? radios("applicationLetter", state.letters, state.letter)
+                              + `<button type="button">Izveidot jaunu</button>` + dropZone() : "")
+        + `</div></div>`;
+    } else {
+      content = `<span class="question"><h4>How many years of experience do you have with Python? *</h4></span>`
+        + `<label class="input-text"><textarea name="questions.question_1.values"></textarea>`
+        + `<span>Atbilde uz jautājumu</span></label>`
+        + `<span class="question"><h4>Vai esat gatavs strādāt birojā Rīgā? *</h4></span>`
+        + `<label class="input-text"><textarea name="questions.question_2.values"></textarea>`
+        + `<span>Atbilde uz jautājumu</span></label>`;
+    }
+    slot.innerHTML = `<form class="apply-flow"><h2>Veic pieteikšanos 1 minūtes laikā</h2>`
+      + `<span>Solis ${state.step} / 4</span><div class="apply-flow__content">${content}</div>`
+      + `<button type="submit" id="main">${state.step === 3 ? "Nākamais" : "Pieteikties"}</button>`
+      + `<button type="submit" id="draft">Saglabāt un turpināt vēlāk</button>`
+      + (state.error ? `<span class="error-text">${state.error}</span>` : "") + `</form>`;
+    const form = slot.querySelector("form");
+    form.addEventListener("change", event => {
+      const target = event.target;
+      if (target.type === "file" && target.files.length) {
+        // cv.lv uploads the file at once and lists it as a new choice, already chosen.
+        const name = target.files[0].name;
+        const inLetters = target.closest(".toggler").querySelector("#letter-toggle");
+        if (inLetters) { state.letters.push(["new-letter", name]); state.letter = "new-letter"; }
+        else { state.cvs.push(["new-cv", name]); state.cv = "new-cv"; }
+        render();
+      } else if (target.name === "cv") { state.cv = target.value; }
+      else if (target.name === "applicationLetter") { state.letter = target.value; }
+    });
+    const toggle = slot.querySelector("#letter-toggle");
+    if (toggle) toggle.addEventListener("click", () => { state.letterOpen = !state.letterOpen; render(); });
+    form.querySelector("#draft").addEventListener("click", event => { event.preventDefault(); window.draftSaved = true; });
+    form.querySelector("#main").addEventListener("click", event => {
+      event.preventDefault();
+      if (state.step === 3) {
+        if (!state.cv) { state.error = "Lūdzu, pievienojiet CV"; render(); return; }
+        state.error = null; state.step = 4; render(); return;
+      }
+      const answers = [...form.querySelectorAll("textarea")].map(area => area.value);
+      if (answers.some(answer => !answer)) { state.error = "Lūdzu, atbildiet uz jautājumu"; render(); return; }
+      window.submitted = {cv: state.cvs.find(([value]) => value === state.cv)[1],
+                          letter: state.letters.find(([value]) => value === state.letter)[1], answers};
+      state.step = 5; render();
+    });
+  }
+  document.getElementById("opener").addEventListener("click", () => { state.step = 3; render(); });
+</script>
+</body>
+</html>

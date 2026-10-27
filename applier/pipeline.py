@@ -69,10 +69,16 @@ class ApplicationLog:
                 return f"Already applied to this job at {row['link']}"
         return None
 
-    def submitted_last_day(self):
+    def submitted_last_day(self, site=None):
+        """Applications sent in the last 24 hours; site "cvlv" or "linkedin" counts only that site's jobs."""
+        where = {"cvlv": " AND link LIKE '%cv.lv%'", "linkedin": " AND link NOT LIKE '%cv.lv%'"}.get(site, "")
         return self.conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('applied','unconfirmed') "
                                  "AND coalesce(reason, '') != 'Applied manually' "
-                                 "AND updated_at >= datetime('now','-1 day')").fetchone()[0]
+                                 "AND updated_at >= datetime('now','-1 day')" + where).fetchone()[0]
+
+    def ats(self, link):
+        row = self.conn.execute("SELECT ats, apply_url FROM applications WHERE link=?", (link,)).fetchone()
+        return (row["ats"], row["apply_url"]) if row else (None, None)
 
     def rows(self):
         return [dict(row) for row in self.conn.execute("SELECT * FROM applications ORDER BY updated_at DESC")]
@@ -82,19 +88,25 @@ class ApplicationLog:
 
 
 def candidates(job_rows, log, min_score, submit, retry=False):
-    """Scored, suitable jobs not handled yet. A dry-run 'ready' job is retried when submitting."""
+    """Scored, suitable jobs not handled yet. A dry-run 'ready' job is retried when submitting.
+
+    A pinned job (the applicant saved it on cv.lv themselves) skips the score and title checks.
+    """
     picked = []
     for row in job_rows:
-        if (row.get("parse_status") != "parsed" or row.get("analysis_status") != "analyzed"
-                or (row.get("match_score") or 0) < min_score or is_unsuitable_job(row.get("title"))
-                or not is_wanted_language(row.get("description"))):
+        if row.get("parse_status") != "parsed":
+            continue
+        if not row.get("pinned") and (
+                row.get("analysis_status") != "analyzed" or (row.get("match_score") or 0) < min_score
+                or is_unsuitable_job(row.get("title")) or not is_wanted_language(row.get("description"))):
             continue
         status = log.status(row["link"])
         if status in DONE or (status in RETRY_ONLY and not retry) or (status == "ready" and not submit and not retry):
             continue
         picked.append(row)
-    # Locations in their SEARCH_LOCATIONS order, remote jobs last; the best score first within each.
-    return sorted(picked, key=lambda row: (region_rank(row), -row["match_score"]))
+    # Pinned jobs first, then locations in their SEARCH_LOCATIONS order, remote jobs last; the best score first
+    # within each.
+    return sorted(picked, key=lambda row: (not row.get("pinned"), region_rank(row), -(row.get("match_score") or 0)))
 
 
 def region_rank(row, locations=None):
@@ -169,20 +181,27 @@ def applied_in_mail(title, company, mail_texts):
 
 def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, submit, limit=None,
         min_score=None, retry=False, example_letter=None, mail_texts=(), base_cv_lv=None, sleep=time.sleep,
-        say=print):
+        say=print, workday_wait=0, site=None):
     """Process candidates up to the daily cap. Returns a count per status.
 
     base_cv_lv: the Latvian CV, used for jobs in Latvia (the English base_cv otherwise).
     example_letter: the applicant's own cover letter, used as the model for one letter per job.
+    site: "linkedin" or "cvlv" when the run is for one site only; its daily limit is counted on its own.
+    workday_wait: seconds to wait for the applicant's sign-in on each Workday site; when set, only Workday
+    jobs from earlier runs are handled.
     mail_texts: subjects and snippets of application confirmation emails, to skip jobs already applied to.
     """
-    from applier import answers, cv as cvlib, easy_apply, external, letter as letter_lib
+    from applier import answers, cv as cvlib, cvlv as cvlv_form, easy_apply, external, letter as letter_lib
+    from scraper import cvlv
 
     min_score = profile.get("min_score", 65) if min_score is None else min_score
-    cap = max(0, int(profile.get("daily_limit", 10)) - log.submitted_last_day()) if submit else 5
+    cap = max(0, int(profile.get("daily_limit", 10)) - log.submitted_last_day(site)) if submit else 5
     if limit is not None:
         cap = min(cap, limit)
     picked = candidates(job_rows, log, min_score, submit, retry)
+    if workday_wait:
+        # The applicant sits at the computer to sign in: only jobs an earlier run found on Workday.
+        picked = [row for row in picked if log.ats(row["link"])[0] == "workday"]
     say(f"Candidates: {len(picked)}; this run handles up to {cap} "
         f"({'SUBMITS applications' if submit else 'dry run, stops before Submit'})")
     counts = {}
@@ -196,10 +215,15 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
     cv_text = cvlib.cv_plain_text(base_cv)
     name = re.sub(r"\W+", "_", f"{profile.get('first_name', '')} {profile.get('last_name', '')}").strip("_") or "CV"
     handled = 0
+    cvlv_client, cvlv_signed = cvlv.Client(), None
+    linkedin_problem = None
     for row in picked:
         if handled >= cap:
             break
         link, title = row["link"], row["title"]
+        from_cvlv = cvlv.is_cvlv(link)
+        if linkedin_problem and not from_cvlv:
+            continue  # LinkedIn stopped this run (sign-in or daily limit); cv.lv jobs still go ahead.
         say(f"-> {title} (score {row['match_score']})")
         progress.step("apply", handled, min(cap, len(picked)), f"Opening the job: {title}")
         if INSTRUCTIONS.search(f"{title}\n{row.get('description') or ''}"):
@@ -209,8 +233,25 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             report("needs_manual", row)
             say("   needs_manual (special instructions)")
             continue
-        state, button = easy_apply.open_job(driver, link)
-        details = easy_apply.job_details(driver)
+        apply_url = button = None
+        if from_cvlv:
+            if cvlv_signed is None:
+                cvlv_signed = cvlv_form.signed_in(driver)
+                if not cvlv_signed:
+                    say("   cv.lv: not signed in, so applications go in as a guest "
+                        "(sign in once: python main.py login --site cvlv)")
+            state, apply_url, vacancy = cvlv_form.open_job(driver, link, cvlv_client, cvlv_signed)
+            details = cvlv_form.details(vacancy)
+            # cv.lv's own form takes the place of Easy Apply.
+            state = "candidate" if state == "cvlv" else state
+        else:
+            try:
+                state, button = easy_apply.open_job(driver, link)
+            except easy_apply.SessionProblem as problem:
+                linkedin_problem = problem
+                say(f"   LinkedIn stopped: {problem}")
+                continue
+            details = easy_apply.job_details(driver)
         reason = None
         if state == "external" and not profile.get("apply_external", True):
             state, reason = "external_skipped", "Apply on the company site manually"
@@ -250,21 +291,30 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             letter_html.write_text(cvlib.render_letter_html(letter, tailored["name"]), encoding="utf-8")
             files["cover_letter"] = cvlib.html_to_pdf(pdf_driver, letter_html, folder / f"{name}_Cover_Letter.pdf")
         screenshot = folder / "review.png"
+        # "How did you hear about us?" gets the site the job really came from.
+        job_profile = {**profile, "job_source": "cv.lv" if from_cvlv else "LinkedIn"}
 
         def answer_fn(question, kind, options, required=True):
             # Optional fields get only the applicant's own data, never AI-written text.
-            return answers.resolve(question, kind, options, profile, cv_text, title, llm if required else None)
+            return answers.resolve(question, kind, options, job_profile, cv_text, title, llm if required else None,
+                                   row.get("description") or details["description"])
 
         base = dict(title=title, company=details["company"], score=row["match_score"], cv_pdf=str(pdf_path),
                     notes="; ".join(notes) or None)
         original = driver.current_window_handle
-        progress.step("apply", handled, min(cap, len(picked)),
-                      f"{'Filling in the company form' if state == 'external' else 'Filling in Easy Apply'}: {company}")
+        form_name = "the company form" if state == "external" else ("the cv.lv form" if from_cvlv else "Easy Apply")
+        progress.step("apply", handled, min(cap, len(picked)), f"Filling in {form_name}: {company}")
         try:
             if state == "external":
-                url, original = external.follow_apply_button(driver, button)
+                # A cv.lv ad names the employer's form itself; on LinkedIn the Apply button opens it in a new tab.
+                url, original = (apply_url, original) if from_cvlv else external.follow_apply_button(driver, button)
                 base.update(apply_url=url, ats=external.detect_ats(url))
-                status, given, ats = external.run_external(driver, url, answer_fn, files, submit, screenshot)
+                status, given, ats = external.run_external(driver, url, answer_fn, files, submit, screenshot,
+                                                           login_wait=workday_wait, say=say)
+            elif from_cvlv:
+                base.update(ats="cvlv")
+                status, given = cvlv_form.run_application(driver, link, answer_fn, files, submit, screenshot,
+                                                          signed=cvlv_signed)
             else:
                 base.update(ats="linkedin")
                 status, given = easy_apply.run_application(driver, button, answer_fn, files, submit, screenshot)
@@ -278,6 +328,12 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             status = "needs_manual"
             log.save(link, status=status, reason=str(problem), answers=json.dumps(problem.answers, ensure_ascii=False),
                      screenshot=None, **base)
+        except easy_apply.SessionProblem as problem:
+            # LinkedIn's daily Easy Apply limit or a sign-in wall: this job and the rest of LinkedIn wait for
+            # the next run, cv.lv goes on.
+            linkedin_problem = problem
+            say(f"   LinkedIn stopped: {problem}")
+            continue
         finally:
             if state == "external":
                 external.close_extra_tabs(driver, original)
@@ -286,9 +342,13 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
         handled += 1
         progress.step("apply", handled, min(cap, len(picked)), f"Done: {title} · {company}")
         if handled < cap:
-            pause = random.uniform(90, 240) if submit else random.uniform(20, 45)
+            # Workday jobs are on different employers' sites, and the applicant is waiting at the computer.
+            pause = random.uniform(10, 20) if workday_wait else (
+                random.uniform(90, 240) if submit else random.uniform(20, 45))
             progress.step("apply", handled, min(cap, len(picked)),
-                          f"Pausing {int(pause)} s before the next job so LinkedIn does not take this for a bot")
+                          f"Pausing {int(pause)} s before the next job so the site does not take this for a bot")
             sleep(pause)
     progress.stage("apply", "done", **counts)
+    if linkedin_problem:
+        raise linkedin_problem
     return counts

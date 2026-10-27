@@ -62,6 +62,8 @@ def build_parser():
         else:
             command.add_argument("--db", type=Path, required=True, help="Existing run database")
         if name in ("scrape", "retry"):
+            command.add_argument("--source", action="append", choices=("linkedin", "cvlv"),
+                                 help="Repeat for several sites (default: SOURCES in config/settings.py)")
             command.add_argument("--browsers", type=int, choices=(1, 2), default=2)
             command.add_argument("--headless", action="store_true")
             command.add_argument("--max-pages", type=nonnegative_int, default=6)
@@ -97,11 +99,18 @@ def build_parser():
     apply.add_argument("--link", help="Only this LinkedIn job (its URL or numeric id)")
     apply.add_argument("--headless", action="store_true")
     apply.add_argument("--model", help="Gemini model (or GEMINI_MODEL)")
+    apply.add_argument("--workday", action="store_true",
+                       help="Only Workday jobs: open each one and wait while you sign in on its site, then fill it")
+    apply.add_argument("--login-wait", type=positive_int, default=5,
+                       help="Minutes to wait for your Workday sign-in on each site (with --workday)")
     run_all = commands.add_parser("run-all", help="Collect, score, sort mail and apply in one go (the desktop app's run)")
     run_all.add_argument("--dry-run", action="store_true", help="Fill applications but stop before Submit")
     run_all.add_argument("--skip-scrape", action="store_true", help="Only apply to the newest collected jobs")
     run_all.add_argument("--mail-only", action="store_true",
                          help="Only sort replies in Gmail (offers, rejections); applies and sends nothing")
+    for command in (apply, run_all):
+        command.add_argument("--source", action="append", choices=("linkedin", "cvlv"),
+                             help="Only this site's jobs (the desktop app runs one site at a time)")
     explain = commands.add_parser("explain", help="Short AI summary of a stopped application and what to do")
     explain.add_argument("--link", required=True)
     hide = commands.add_parser("hide", help="Hide a stopped application from the app's to-do list")
@@ -109,7 +118,8 @@ def build_parser():
     marked = commands.add_parser("mark-applied", help="Record jobs you applied to yourself, so apply skips them")
     marked.add_argument("links", nargs="+", help="LinkedIn job URLs or numeric ids")
     marked.add_argument("--db", type=Path, help="Run database with the jobs (default: the newest in results)")
-    login = commands.add_parser("login", help="Sign in to LinkedIn once in the applying browser profile")
+    login = commands.add_parser("login", help="Sign in to LinkedIn or cv.lv once in the applying browser profile")
+    login.add_argument("--site", choices=("linkedin", "cvlv"), default="linkedin")
     for command in (apply, login):
         command.add_argument("--profile-dir", type=Path, default=BASE_DIR / "browser_profile")
     apply.add_argument("--applicant", type=Path, default=BASE_DIR / "config" / "applicant.json")
@@ -120,11 +130,29 @@ def build_parser():
     return parser
 
 
-def latest_database():
+def latest_database(sources=None):
+    """The newest run database; with sources, the newest one that has jobs from those sites."""
     runs = sorted((BASE_DIR / "results").glob("jobs_*.db"), key=lambda path: path.stat().st_mtime)
+    if sources:
+        runs = [path for path in runs if database_has_source(path, sources)]
     if not runs:
-        raise RuntimeError("No run database in results; run scrape first")
+        raise RuntimeError("No run database" + (f" with {', '.join(sorted(sources))} jobs" if sources else "")
+                           + " in results; run scrape first")
     return runs[-1]
+
+
+def database_has_source(path, sources):
+    try:
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
+            links = [row[0] for row in connection.execute("SELECT link FROM jobs LIMIT 2000")]
+    except sqlite3.Error:
+        return False
+    return any(site_of(link) in sources for link in links)
+
+
+def site_of(link):
+    """"cvlv" or "linkedin": the site a job link belongs to."""
+    return "cvlv" if "cv.lv" in (link or "").lower() else "linkedin"
 
 
 def mark_applied_command(args):
@@ -170,8 +198,10 @@ def run_all_command(args):
         progress.emit("run", state="done")
         return 0
     steps = []
+    # The desktop app runs one site at a time, so the sites' jobs and lists never mix.
+    only = [flag for source in (args.source or []) for flag in ("--source", source)]
     if not args.skip_scrape:
-        scrape = ["scrape", "--headless", "--browsers", "1"]
+        scrape = ["scrape", "--headless", "--browsers", "1"] + only
         if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
             scrape.append("--no-ai")
         steps.append(("collect", scrape))
@@ -184,7 +214,7 @@ def run_all_command(args):
             progress.stage(name, "error", message=str(error))
             print(f"Error in {name}: {error}", file=sys.stderr)
     try:
-        db = latest_database()
+        db = latest_database(set(args.source or []))
     except RuntimeError as error:
         progress.emit("run", state="done", error=str(error))
         return 1
@@ -194,7 +224,7 @@ def run_all_command(args):
     else:
         progress.stage("mail", "skipped")
     if (BASE_DIR / "config" / "applicant.json").exists():
-        later.append(("apply", ["apply", "--db", str(db)] + (["--dry-run"] if args.dry_run else [])))
+        later.append(("apply", ["apply", "--db", str(db)] + only + (["--dry-run"] if args.dry_run else [])))
     else:
         progress.stage("apply", "skipped")
     for name, argv in later:
@@ -296,7 +326,12 @@ def login_command(args):
 
     driver = profile_driver(args.profile_dir)
     try:
-        signed_in = wait_for_login(driver)
+        if args.site == "cvlv":
+            from applier.cvlv import wait_for_login as wait_for_cvlv_login
+
+            signed_in = wait_for_cvlv_login(driver)
+        else:
+            signed_in = wait_for_login(driver)
     finally:
         try:
             driver.quit()
@@ -304,6 +339,37 @@ def login_command(args):
             pass
     print("Signed in; the session is saved for apply." if signed_in else "Not signed in. Run login again.")
     return 0 if signed_in else 1
+
+
+def pin_saved_cvlv(driver, path, llm):
+    """Add the applicant's saved cv.lv vacancies to the run database and pin them; returns how many."""
+    import requests
+    from applier import cvlv as cvlv_form
+    from scraper import cvlv
+
+    if not cvlv_form.signed_in(driver):
+        print("cv.lv: not signed in, so saved vacancies are skipped (python main.py login --site cvlv)")
+        return 0
+    db = JobDatabase(path)
+    client = cvlv.Client()
+    pinned = 0
+    try:
+        known = {row["link"] for row in db.rows()}
+        for number in cvlv_form.vacancy_ids(driver, "saved"):
+            link = cvlv.vacancy_link(number)
+            if link not in known:
+                try:
+                    vacancy = client.vacancy(number)
+                except requests.RequestException as error:
+                    print(f"cv.lv: saved vacancy {number} is unavailable: {error}")
+                    continue
+                db.save_job(cvlv.job_row({"id": number}, vacancy,
+                                         cvlv.description(vacancy, client, llm.read_image)))
+            db.pin(link)
+            pinned += 1
+    finally:
+        db.close()
+    return pinned
 
 
 def apply_command(args):
@@ -319,12 +385,14 @@ def apply_command(args):
         raise RuntimeError(f"Fill in your answers first: copy config/applicant.example.json to {args.applicant}")
     profile = load_profile(args.applicant)
     submit = (args.submit or bool(profile.get("auto_submit"))) and not args.dry_run
-    path = (args.db or latest_database()).resolve()
+    path = (args.db or latest_database(set(args.source or []))).resolve()
     db = JobDatabase(path)
     try:
         rows = db.rows()
     finally:
         db.close()
+    if args.source:
+        rows = [row for row in rows if site_of(row.get("link")) in args.source]
     if args.link:
         job_id = re.findall(r"\d{6,}", args.link)
         rows = [row for row in rows if job_id and job_id[-1] in (row.get("link") or "")]
@@ -340,9 +408,21 @@ def apply_command(args):
     try:
         drivers.append(profile_driver(args.profile_dir, headless=args.headless))
         drivers.append(pdf_driver())
+        if "cvlv" in selected_sources(args) and not args.link and not args.workday:
+            # Vacancies the applicant saved on cv.lv themselves are applied to first, whatever their score.
+            pinned = pin_saved_cvlv(drivers[0], path, llm)
+            if pinned:
+                print(f"cv.lv: {pinned} saved vacancies go first")
+                db = JobDatabase(path)
+                try:
+                    rows = db.rows()
+                finally:
+                    db.close()
         counts = run(rows, driver=drivers[0], pdf_driver=drivers[1], llm=llm, profile=profile, base_cv=base_cv,
                      out_dir=BASE_DIR / "results" / "applications", log=log, submit=submit, limit=args.limit,
-                     min_score=args.min_score, retry=args.retry,
+                     min_score=args.min_score, retry=args.retry or args.workday,
+                     workday_wait=args.login_wait * 60 if args.workday else 0,
+                     site=args.source[0] if args.source and len(args.source) == 1 else None,
                      example_letter=args.letter_example.read_text(encoding="utf-8")
                      if args.letter_example.is_file() else None, mail_texts=mail_texts_for_apply(),
                      base_cv_lv=base_cv_lv)
@@ -394,6 +474,66 @@ def mail_command(args):
     return 0
 
 
+def selected_sources(args):
+    """"linkedin" and/or "cvlv": the --source flags, else SOURCES in config/settings.py.
+
+    retry resumes an unfinished LinkedIn run, so it collects nothing from cv.lv unless asked.
+    """
+    from config.settings import SOURCES
+
+    if getattr(args, "source", None):
+        return set(args.source)
+    if getattr(args, "command", None) == "retry":
+        return {"linkedin"}
+    return {re.sub(r"\W", "", name.lower()) for name in SOURCES}
+
+
+def collect_cvlv(db, args, known_links, found_before=0):
+    """Read new cv.lv ads into the run database. A cv.lv failure never stops the LinkedIn part."""
+    import requests
+    from config.settings import CVLV_CATEGORIES, CVLV_SKIP_TITLE_WORDS
+    from scraper import cvlv
+
+    llm = None
+    if not getattr(args, "no_ai", False) and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
+        try:
+            from applier.llm import LLM
+
+            # Ads published as a picture are read by Gemini; without AI they stay unscored.
+            llm = LLM(model=getattr(args, "model", None))
+        except RuntimeError as error:
+            print(f"cv.lv: picture ads stay unread ({error})")
+    saved = []
+
+    def save(row):
+        db.save_job(row)
+        known_links.add(row["Link"])
+        saved.append(row["Link"])
+
+    def on_step(done, total, title):
+        progress.step("collect", done, total, f"cv.lv: {title}", found=found_before + len(saved))
+
+    progress.step("collect", 0, 1, "cv.lv: searching for jobs", found=found_before)
+    try:
+        cvlv.collect(save, client=cvlv.Client(), categories=CVLV_CATEGORIES, skip_words=CVLV_SKIP_TITLE_WORDS,
+                     known=known_links, read_image=llm.read_image if llm else None, limit=args.limit,
+                     on_step=on_step)
+    except requests.RequestException as error:
+        print(f"cv.lv unavailable: {error}", file=sys.stderr)
+    finally:
+        if llm is not None:
+            llm.close()
+    print(f"cv.lv: {len(saved)} new vacancies")
+    return len(saved)
+
+
+def adopt_previous_analysis(db, path):
+    """Scores from the last runs for unchanged jobs, so the AI scores only new or changed ads."""
+    older = sorted((p for p in Path(path).parent.glob("jobs_*.db") if p.resolve() != Path(path).resolve()),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    return sum(db.adopt_analysis(other) for other in older[:10])
+
+
 def initialize_searches(db, args):
     from config.settings import LOCAL_LOOKBACK_HOURS, SEARCH_LOCATIONS, SEARCH_ROLES
 
@@ -420,7 +560,9 @@ def parse_pending(db, args):
     from scraper.parser import (BrowserSessionError, DescriptionError, RateLimitError,
                                 extract_job_details, stop_event)
 
-    jobs = db.pending_jobs(args.limit)
+    # cv.lv ads come with their text from the API; one without text has none to read on the page either.
+    jobs = [job for job in db.pending_jobs() if job.get("Source") != "cv.lv"]
+    jobs = jobs if args.limit is None else jobs[:args.limit]
     if not jobs or stop_event.is_set():
         progress.stage("parse", "done", total=0)
         return
@@ -496,7 +638,9 @@ def scrape_run(db, args):
     from scraper.parser import DescriptionError, RateLimitError, reset_navigation_state
 
     reset_navigation_state()
-    searches = db.conn.execute("SELECT url, site FROM searches WHERE status != 'complete' ORDER BY rowid").fetchall()
+    sources = selected_sources(args)
+    searches = db.conn.execute("SELECT url, site FROM searches WHERE status != 'complete' ORDER BY rowid").fetchall() \
+        if "linkedin" in sources else []
     driver = None
     discovered = set()
     known_links = {row["link"] for row in db.rows()}
@@ -507,6 +651,8 @@ def scrape_run(db, args):
         known_links.add(job["Link"])
 
     progress.stage("collect", "start", total=len(searches))
+    # cv.lv first: a few quick API requests, and its Latvian jobs are applied to first.
+    from_cvlv = collect_cvlv(db, args, known_links) if "cvlv" in sources else 0
     try:
         for number, search in enumerate(searches, 1):
             from scraper.parser import stop_event
@@ -516,7 +662,7 @@ def scrape_run(db, args):
             role = unquote(re.search(r"keywords=([^&]+)", site["url"]).group(1)).replace("+", " ") \
                 if "keywords=" in site["url"] else ""
             progress.step("collect", number - 1, len(searches), f"Searching: {role} · {site['country']}",
-                          found=len(discovered))
+                          found=from_cvlv + len(discovered))
             if driver is None:
                 driver = setup_driver(headless=args.headless)
             remaining = None if args.limit is None else args.limit - len(discovered)
@@ -543,7 +689,7 @@ def scrape_run(db, args):
                 driver.quit()
             except Exception as error:
                 print(f"Warning: could not close collection browser: {error}")
-    progress.stage("collect", "done", total=len(searches), found=len(discovered))
+    progress.stage("collect", "done", total=len(searches), found=from_cvlv + len(discovered))
     parse_pending(db, args)
 
 
@@ -613,13 +759,18 @@ def main(argv=None):
             with db.conn:
                 db.conn.execute("CREATE TABLE IF NOT EXISTS searches (url TEXT PRIMARY KEY, site TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT)")
             if args.command == "scrape":
-                initialize_searches(db, args)
+                if "linkedin" in selected_sources(args):
+                    initialize_searches(db, args)
             elif args.refresh_searches:
                 with db.conn:
                     db.conn.execute("UPDATE searches SET status='pending', last_error=NULL")
             scrape_run(db, args)
         failed = False
         if args.command == "analyze" or (args.command in ("scrape", "retry") and not args.no_ai):
+            if not args.force_reanalyze:
+                adopted = adopt_previous_analysis(db, path)
+                if adopted:
+                    print(f"AI: {adopted} unchanged jobs keep their score from an earlier run")
             if db.analysis_jobs():
                 from utils.analyzer import analyze_jobs_with_cv
                 try:
@@ -640,8 +791,11 @@ def main(argv=None):
                              min_score=args.min_score if args.command == "export" else None)
         print(f"Report: {report}")
         rows = db.rows()
-        pending = len(db.pending_jobs())
-        print(f"Jobs: {len(rows)}; parsed: {len(rows) - pending}; pending/errors: {pending}")
+        unread = db.pending_jobs()
+        # A cv.lv ad without text (a picture while AI is off) has nothing a retry could read.
+        pending = len([job for job in unread if job.get("Source") != "cv.lv"])
+        print(f"Jobs: {len(rows)}; parsed: {len(rows) - len(unread)}; pending/errors: {pending}"
+              + (f"; cv.lv ads without text: {len(unread) - pending}" if len(unread) > pending else ""))
         incomplete = 0
         if args.command in ("scrape", "retry"):
             incomplete = db.conn.execute("SELECT COUNT(*) FROM searches WHERE status != 'complete'").fetchone()[0]

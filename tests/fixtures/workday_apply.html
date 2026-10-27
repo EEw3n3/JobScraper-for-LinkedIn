@@ -1,0 +1,125 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Workday imitation</title>
+<style>.hidden{display:none} [role=listbox]{border:1px solid #999;padding:4px}</style></head>
+<body>
+<!-- An imitation of a Workday career site: job page, "Start Your Application" popup, sign-in step and
+     the steps My Information, My Experience, Application Questions and Review, with Workday's
+     data-automation-id names and its button lists. Opening it with #signed skips the sign-in step. -->
+<div data-automation-id="legalNotice">We use cookies
+  <button data-automation-id="legalNoticeDeclineButton" onclick="this.parentElement.remove()">Decline</button>
+  <button data-automation-id="legalNoticeAcceptButton">Accept Cookies</button></div>
+
+<div id="job"><h2 data-automation-id="jobPostingHeader">Integration Specialist</h2>
+  <a data-automation-id="adventureButton" href="#" onclick="openPopup(); return false;">Apply</a></div>
+<div id="popup" class="hidden" data-automation-id="wd-popup-content">Start Your Application
+  <a data-automation-id="autofillWithResume" href="#">Autofill with Resume</a>
+  <a data-automation-id="applyManually" href="#" onclick="startFlow(); return false;">Apply Manually</a></div>
+
+<div id="flow" class="hidden" data-automation-id="applyFlowPage">
+  <ol data-automation-id="progressBar"><li id="active" data-automation-id="progressBarActiveStep"></li></ol>
+  <div id="signin" class="hidden" data-automation-id="signInContent">Sign In
+    <button data-automation-id="SignInWithEmailButton">Sign in with email</button></div>
+
+  <div id="step1" class="hidden step">
+    <div data-automation-id="formField-source"><label for="source">How Did You Hear About Us?<abbr>*</abbr></label>
+      <div data-automation-id="multiselectInputContainer" id="sourceBox">
+        <input id="source" data-automation-id="searchBox" type="text" onclick="showPrompt('sourceBox', SOURCES)"></div></div>
+    <div data-automation-id="formField-first"><label for="first">Given Name(s)<abbr>*</abbr></label>
+      <input id="first" type="text" aria-required="true"></div>
+    <div data-automation-id="formField-last"><label for="last">Family Name<abbr>*</abbr></label>
+      <input id="last" type="text" aria-required="true"></div>
+    <div data-automation-id="formField-phoneType"><label for="phoneType">Phone Device Type<abbr>*</abbr></label>
+      <button id="phoneType" type="button" aria-haspopup="listbox" onclick="showList(this, ['Landline', 'Mobile'])">Select One</button></div>
+    <div data-automation-id="formField-code"><label for="code">Country Phone Code<abbr>*</abbr></label>
+      <div data-automation-id="multiselectInputContainer" id="codeBox">
+        <input id="code" data-automation-id="searchBox" type="text"
+               onclick="showPrompt('codeBox', {'Lithuania (+370)': null, 'Latvia (+371)': null, 'Estonia (+372)': null})"></div></div>
+    <div data-automation-id="formField-phone"><label for="phone">Phone Number<abbr>*</abbr></label>
+      <input id="phone" type="text" aria-required="true"></div>
+  </div>
+
+  <div id="step2" class="hidden step"><h3>Resume/CV</h3>
+    <input id="resume" type="file" data-automation-id="file-upload-input-ref" style="opacity:0.01"></div>
+
+  <div id="step3" class="hidden step">
+    <div data-automation-id="formField-visa"><label for="visa">Will you now or in the future require visa sponsorship?<abbr>*</abbr></label>
+      <button id="visa" type="button" aria-haspopup="listbox" onclick="showList(this, ['Yes', 'No'])">Select One</button></div>
+    <div data-automation-id="formField-gender"><label for="gender">Gender</label>
+      <button id="gender" type="button" aria-haspopup="listbox" onclick="showList(this, ['Male', 'Female', 'I do not wish to answer'])">Select One</button></div>
+  </div>
+
+  <div id="step4" class="hidden step">Review your application</div>
+  <div id="errors"></div>
+  <button data-automation-id="pageFooterNextButton" id="next" onclick="next()">Save and Continue</button>
+</div>
+<div id="done" class="hidden">Application Submitted. Thank you for applying!</div>
+
+<script>
+const SOURCES = {"Job Board": {"LinkedIn": null, "Indeed": null}, "Social Media": {"Facebook": null}, "Other": null};
+const STEPS = ["My Information", "My Experience", "Application Questions", "Review"];
+let step = -1;
+const show = (id, on) => document.getElementById(id).classList.toggle("hidden", !on);
+
+function openPopup() { show("popup", true); }
+function startFlow() {
+  show("job", false); show("popup", false); show("flow", true);
+  if (location.hash === "#signed") { go(0); } else {
+    document.getElementById("active").innerText = "Create Account/Sign In"; show("signin", true); show("next", false);
+  }
+}
+function go(n) {
+  step = n; show("signin", false); show("next", true);
+  document.querySelectorAll(".step").forEach((el, i) => el.classList.toggle("hidden", i !== n));
+  document.getElementById("active").innerText = STEPS[n];
+  document.getElementById("next").innerText = n === 3 ? "Submit" : "Save and Continue";
+}
+function closeLists() { document.querySelectorAll("[role=listbox]").forEach(el => el.remove()); }
+function showList(button, options) {
+  closeLists();
+  const list = document.createElement("ul"); list.setAttribute("role", "listbox");
+  options.forEach(text => {
+    const li = document.createElement("li"); li.setAttribute("role", "option"); li.innerText = text;
+    li.onclick = () => { button.innerText = text; closeLists(); };
+    list.appendChild(li);
+  });
+  document.body.appendChild(list);
+}
+function showPrompt(boxId, tree) {
+  closeLists();
+  const box = document.getElementById(boxId);
+  const list = document.createElement("ul"); list.setAttribute("role", "listbox");
+  Object.entries(tree).forEach(([text, children]) => {
+    const li = document.createElement("li"); li.setAttribute("data-automation-id", "promptOption"); li.innerText = text;
+    li.onclick = () => {
+      if (children) { showPrompt(boxId, children); return; }
+      const chosen = document.createElement("div"); chosen.setAttribute("data-automation-id", "selectedItem");
+      chosen.innerText = text; box.appendChild(chosen); closeLists();
+    };
+    list.appendChild(li);
+  });
+  document.body.appendChild(list);
+}
+function chosen(boxId) { const el = document.querySelector("#" + boxId + " [data-automation-id=selectedItem]"); return el ? el.innerText : ""; }
+function next() {
+  const errors = [];
+  if (step === 0) {
+    if (!chosen("sourceBox")) errors.push("How Did You Hear About Us? is required");
+    ["first", "last", "phone"].forEach(id => { if (!document.getElementById(id).value) errors.push(id + " is required"); });
+    if (document.getElementById("phoneType").innerText === "Select One") errors.push("Phone Device Type is required");
+    if (!chosen("codeBox")) errors.push("Country Phone Code is required");
+  }
+  if (step === 1 && !document.getElementById("resume").files.length) errors.push("Resume is required");
+  if (step === 2 && document.getElementById("visa").innerText === "Select One") errors.push("Visa question is required");
+  document.getElementById("errors").innerHTML = errors.map(e => `<div data-automation-id="errorMessage">${e}</div>`).join("");
+  if (errors.length) return;
+  if (step < 3) { go(step + 1); return; }
+  window.submitted = {
+    source: chosen("sourceBox"), first: document.getElementById("first").value, last: document.getElementById("last").value,
+    phoneType: document.getElementById("phoneType").innerText, code: chosen("codeBox"),
+    phone: document.getElementById("phone").value, resume: document.getElementById("resume").files[0].name,
+    visa: document.getElementById("visa").innerText, gender: document.getElementById("gender").innerText,
+  };
+  show("flow", false); show("done", true);
+}
+</script>
+</body></html>

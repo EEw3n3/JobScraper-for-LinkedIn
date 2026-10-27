@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <title>JobScraper</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="app.css">
 </head>
-<body>
+<body data-site="linkedin">
 <nav class="rail" aria-label="Sections">
   <img class="logo" src="icon.png" alt="JobScraper" width="32" height="32">
   <button class="rail-btn active" title="Run" aria-label="Run" aria-current="page">
@@ -23,6 +23,12 @@
 
 <main class="layout">
   <section class="column">
+    <div class="site-switch" role="tablist" aria-label="Site">
+      <button class="site-tab active" data-site="linkedin" role="tab" aria-selected="true" title="LinkedIn (Ctrl+1)">
+        <span class="site-mark" aria-hidden="true">in</span><span class="site-name">LinkedIn</span><span class="site-dot" aria-hidden="true"></span></button>
+      <button class="site-tab" data-site="cvlv" role="tab" aria-selected="false" title="cv.lv (Ctrl+2)">
+        <span class="site-mark" aria-hidden="true">cv</span><span class="site-name">cv.lv</span><span class="site-dot" aria-hidden="true"></span></button>
+    </div>
     <header class="title-row">
       <div class="title-text">
         <div class="title-line">
@@ -34,6 +40,10 @@
       <button class="secondary mail-btn" id="mail-btn" title="Only sort Gmail: offers, rejections, confirmations. Sends nothing.">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6.5h16v11H4z M4.5 7l7.5 6 7.5-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         <span>Check mail</span>
+      </button>
+      <button class="secondary mail-btn" id="workday-btn" title="Jobs on Workday sites: the app opens each one, you sign in on the employer's site, and the app fills in the form.">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 11V8a3 3 0 0 1 6 0v3 M6.5 11h11v8h-11z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        <span>Workday</span>
       </button>
       <button class="start" id="start-btn">
         <svg aria-hidden="true" class="icon-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>

@@ -18,7 +18,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 
-APPLY_BUTTONS = ("button.jobs-apply-button, button[data-view-name='job-apply-button'], "
+from applier.vocabulary import OPTIONAL, REQUIRED
+
+APPLY_BUTTONS =("button.jobs-apply-button, button[data-view-name='job-apply-button'], "
                  "a[data-view-name='job-apply-button'], a.jobs-apply-button")
 # 2026 LinkedIn renders a native <dialog data-testid="dialog">; older layouts use the div variants.
 DIALOG = ("dialog[data-testid='dialog'], dialog[open], div.jobs-easy-apply-modal, "
@@ -30,10 +32,12 @@ WORDS = {
     "next": ("continue to next step", "next", "continue", "turpināt", "nākamais", "далее", "продолжить"),
     "discard": ("discard", "atmest", "отменить", "не сохранять", "удалить"),
     "dismiss": ("dismiss", "aizvērt", "закрыть", "пропустить"),
-    "upload": ("upload", "augšupielādēt", "загрузить"),
+    "upload": ("upload", "attach", "augšupielādēt", "augšuplādēt", "pievienot", "загрузить", "прикрепить", "lae üles",
+               "įkelti", "hochladen"),
     "apply": ("apply", "подать заявку", "pieteikties"),
-    "cover": ("cover", "сопроводительн", "motivācijas", "pavadvēstul"),
-    "resume": ("resume", "curriculum", "dzīvesgājum", "резюме"),
+    "cover": ("cover", "motivation", "application letter", "сопроводительн", "мотивацион", "письм", "motivācijas",
+              "pavadvēstul", "vēstul", "izvēlieties pieteikumu", "kaaskiri", "motyvacin", "anschreiben"),
+    "resume": ("resume", "curriculum", "dzīvesgājum", "резюме", "cv"),
     "applied": ("application was sent", "application submitted", "pieteikums nosūtīts", "отклик отправлен",
                 "заявка отправлена"),
     "limit": ("easy apply limit", "application limit", "you've reached", "limit for today"),
@@ -41,7 +45,11 @@ WORDS = {
     # LinkedIn's newer markup has generated class names, so the Easy Apply button is found by its label.
     "easy": ("easy apply", "простой подачи", "простая подача", "vienkāršā pieteikšan", "vienkāršo pieteikšan"),
 }
-SELECT_PLACEHOLDERS = ("select an option", "izvēlieties", "выберите")
+# A file picker's button: "Select file" (ReachMee), "Choose file", "Browse".
+FILE_CHOOSER = re.compile(r"^(select|choose|add|attach) (a )?(file|document)s?$|^browse( files)?$|"
+                          r"^(izvēlēties|izvēlieties|pievienot) (failu|dokumentu)$|^выбрать файл$|^выберите файл$")
+SELECT_PLACEHOLDERS = ("select an option", "select...", "please select", "choose...", "izvēlieties", "izvēlies",
+                       "выберите", "vali", "pasirinkite", "bitte wählen", "--", "—")
 
 
 class SessionProblem(RuntimeError):
@@ -161,8 +169,31 @@ def open_dialog_present(driver):
     return any(visible(element) for element in driver.find_elements(By.CSS_SELECTOR, DIALOG))
 
 
+# Placeholders that say "type here" instead of naming the field; the label is then the text around the box.
+GENERIC_PLACEHOLDER = re.compile(r"^(please )?(enter|type|write|fill( in)?)( here| text| value)?\.{0,3}$|"
+                                 r"^(your )?answer( to the question| here)?$|^text$|^atbilde( uz jautājumu)?$|"
+                                 r"^ответ( на вопрос)?$|"
+                                 r"^(ievadiet|ievadi|rakstiet|введите|напишите)( šeit| tekstu| текст| здесь)?\.{0,3}$|"
+                                 r"^\+?\d[\d ()-]{5,}$", re.I)
+
+
 def question_text(driver, control):
-    """Best available label for a form control."""
+    """Best available label for a form control. A label that only says "Your answer" gives way to the
+    question written above the box (cv.lv's screening questions are headings before their text areas)."""
+    text = _label_text(driver, control)
+    if not text or GENERIC_PLACEHOLDER.search(clean_question(text)):
+        above = (driver.execute_script(
+            "let el = arguments[0];"
+            " for (let i = 0; i < 4 && el; i++, el = el.parentElement) {"
+            "   for (let p = el.previousElementSibling; p; p = p.previousElementSibling) {"
+            "     const t = (p.innerText || '').trim(); if (t) return t.split('\\n').pop(); } }"
+            " return '';", control) or "").strip()
+        if above:
+            return above
+    return text
+
+
+def _label_text(driver, control):
     control_id = control.get_attribute("id")
     if control_id:
         labels = driver.find_elements(By.CSS_SELECTOR, f"label[for='{control_id}']")
@@ -184,12 +215,40 @@ def question_text(driver, control):
         if text:
             return text
     text = (control.get_attribute("aria-label") or control.get_attribute("placeholder") or "").strip()
-    if text:
+    if text and not GENERIC_PLACEHOLDER.search(text):
         return text
     # Last resort: the first line of text in the nearest container that has some.
     return (driver.execute_script(
         "let el = arguments[0]; for (let i = 0; i < 4 && el; i++) { el = el.parentElement;"
         " const t = el && el.innerText.trim(); if (t) return t.split('\\n')[0]; } return '';", control) or "").strip()
+
+
+# What a field holds by its HTML autocomplete token, or by its name/id when the label says nothing.
+AUTOCOMPLETE_HINTS = {
+    "given-name": "first name", "family-name": "last name", "name": "full name", "email": "email", "tel": "phone",
+    "tel-national": "phone", "url": "website", "organization": "current company", "address-level2": "city",
+    "country-name": "country", "country": "country",
+}
+NAME_HINTS = {
+    "firstname": "first name", "fname": "first name", "givenname": "first name", "lastname": "last name",
+    "lname": "last name", "surname": "last name", "familyname": "last name", "fullname": "full name",
+    "name": "full name", "email": "email", "emailaddress": "email", "mail": "email", "phone": "phone",
+    "phonenumber": "phone", "tel": "phone", "telephone": "phone", "mobile": "phone", "linkedin": "linkedin",
+    "linkedinurl": "linkedin", "github": "github", "city": "city", "country": "country",
+}
+
+
+def with_hint(control, question):
+    """The label plus what the field's autocomplete token (or, without any label, its name) says it
+    holds: an unlabelled box named "email" becomes "email"."""
+    tokens = (control.get_attribute("autocomplete") or "").lower().split()
+    hint = next((AUTOCOMPLETE_HINTS[token] for token in reversed(tokens) if token in AUTOCOMPLETE_HINTS), None)
+    if hint is None and not question.strip():
+        key = re.sub(r"[^a-z]", "", (control.get_attribute("name") or control.get_attribute("id") or "").lower())
+        hint = NAME_HINTS.get(key)
+    if hint and hint not in question.lower():
+        return f"{question} ({hint})" if question else hint
+    return question
 
 
 def clean_question(text):
@@ -198,9 +257,24 @@ def clean_question(text):
     return " ".join(dict.fromkeys(lines)).replace("*", "").replace("✱", "").strip()
 
 
+def trap(driver, control):
+    """A honeypot: a box that people cannot see and only bots fill in. Filling it marks the application as spam."""
+    names = " ".join(control.get_attribute(attribute) or "" for attribute in ("name", "id", "class")).lower()
+    if re.search(r"honeypot|(^|[\s_-])hp[_-]|bot[_-]?field|leave[_-]?(this[_-]?)?(blank|empty)", names):
+        return True
+    return bool(driver.execute_script(
+        "const el = arguments[0], r = el.getBoundingClientRect(), s = getComputedStyle(el);"
+        " return r.right + scrollX <= 0 || r.bottom + scrollY <= 0 || r.left + scrollX >= innerWidth + 1000"
+        " || parseFloat(s.opacity) === 0"
+        " || el.getAttribute('aria-hidden') === 'true';", control))
+
+
 def is_required(driver, control, question):
+    lowered = (question or "").lower()
+    if any(word in lowered for word in OPTIONAL):
+        return False
     return bool(control.get_attribute("required") or control.get_attribute("aria-required") == "true"
-                or "required" in (question or "").lower()
+                or any(word in lowered for word in REQUIRED)
                 or driver.execute_script("const g = arguments[0].closest('fieldset, .fb-dash-form-element, "
                                          ".jobs-easy-apply-form-section__grouping, label, .application-question');"
                                          " return !!(g && /[*✱]/.test(g.innerText));", control))
@@ -211,12 +285,15 @@ class FormFiller:
 
     answer_fn(question, kind, options, required) -> (value, source); optional questions are answered
     only from the applicant's own data, never written by the AI.
+    plan=True only decides what every field would get, without typing, clicking or uploading
+    (the form check in tools/form_lab.py); unanswered required questions are collected in missing.
     """
 
-    def __init__(self, driver, answer_fn, files):
-        self.driver, self.answer_fn, self.files = driver, answer_fn, files
+    def __init__(self, driver, answer_fn, files, plan=False):
+        self.driver, self.answer_fn, self.files, self.plan = driver, answer_fn, files, plan
         self.log = []
         self.uploaded = set()
+        self.missing = []
 
     def option_label(self, radio):
         """(visible text, element to click) for one radio option."""
@@ -236,6 +313,9 @@ class FormFiller:
         self.log.append({"question": question, "answer": value, "source": source})
 
     def unanswered(self, question):
+        if self.plan:
+            self.missing.append(question)
+            return
         raise NeedsManual(f"No truthful answer for required question: {question}", self.log)
 
     def label_for(self, control):
@@ -247,57 +327,142 @@ class FormFiller:
         self._radios(box)
         self._selects(box)
         self._texts(box)
-        self._checkboxes(box)
+        self._checkboxes(box, self._checkbox_groups(box))
 
     def _files(self, box):
-        if "cv" not in self.uploaded and not box.find_elements(By.CSS_SELECTOR, "input[type='file']"):
-            # The 2026 dialog has no file input until its upload button creates one.
-            for button in box.find_elements(By.CSS_SELECTOR, "button"):
-                label = label_of(button)
-                if visible(button) and has_words(label, "upload") and not has_words(label, "cover"):
-                    if upload_via_button(self.driver, button, self.files["cv"]):
-                        self.uploaded.add("cv")
-                        self.record(label, Path(self.files["cv"]).name, "file")
-                        pause(2, 3)
-                    break
-        if self.files.get("cover_letter") and "cover" not in self.uploaded \
-                and not box.find_elements(By.CSS_SELECTOR, "input[type='file']"):
-            for button in box.find_elements(By.CSS_SELECTOR, "button"):
-                label = label_of(button)
-                if visible(button) and has_words(label, "upload") and has_words(label, "cover"):
-                    if upload_via_button(self.driver, button, self.files["cover_letter"]):
-                        self.uploaded.add("cover")
-                        self.record(label, Path(self.files["cover_letter"]).name, "file")
+        if not box.find_elements(By.CSS_SELECTOR, "input[type='file']"):
+            # The 2026 dialog (and ReachMee) has no file input in the form: its upload button creates or
+            # opens one elsewhere on the page.
+            for kind, key in (("cv", "cv"), ("cover", "cover_letter")):
+                if kind in self.uploaded or not self.files.get(key):
+                    continue
+                for button in box.find_elements(By.CSS_SELECTOR, "button"):
+                    label, context = self.upload_button(button)
+                    if label is None or (kind == "cover") != (has_words(context, "cover")
+                                                              or bool(re.search(r"pldocument|personal letter",
+                                                                                context))):
+                        continue
+                    if self.plan or upload_via_button(self.driver, button, self.files[key]):
+                        self.uploaded.add(kind)
+                        self.record(label, Path(self.files[key]).name, "file")
                         pause(2, 3)
                     break
         for control in box.find_elements(By.CSS_SELECTOR, "input[type='file']"):
-            # LinkedIn hides the file input itself behind an upload button, so check its container.
-            key = control.get_attribute("id") or control.get_attribute("name") or "file"
-            label = self.label_for(control) if control.get_attribute("id") else None
-            shown = (visible(control) or visible(control.find_element(By.XPATH, ".."))
-                     or (label is not None and visible(label)))
-            if key in self.uploaded or not shown:
-                continue
-            question = clean_question(question_text(self.driver, control)) or "file upload"
-            if has_words(question + " " + key, "cover"):
-                path = self.files.get("cover_letter")
-                if not path:
-                    if is_required(self.driver, control, question):
-                        self.unanswered(question)
-                    continue
-            elif "cv" in self.uploaded:
-                continue
-            else:
-                path = self.files["cv"]
-                self.uploaded.add("cv")
+            try:
+                self._file_input(control)
+            except StaleElementReferenceException:
+                continue  # The form redrew itself after an upload; the next pass finds the new input.
+
+    def upload_button(self, button):
+        """(label, context) of a visible button that uploads a document, else (None, None). The context adds
+        the heading the button names in aria-labelledby and its id ("button-prof_cvdocument")."""
+        if not visible(button):
+            return None, None
+        label = label_of(button)
+        context = " ".join(filter(None, (label, button.get_attribute("id") or "", self.driver.execute_script(
+            "return (arguments[0].getAttribute('aria-labelledby') || '').split(/\\s+/)"
+            ".map(id => document.getElementById(id)).filter(Boolean).map(e => e.innerText).join(' ');",
+            button) or ""))).lower()
+        if not (has_words(label, "upload") or FILE_CHOOSER.search(label.lower())) \
+                or re.search(r"photo|foto|фото|picture|attēl|avatar", context):
+            return None, None
+        return label, context
+
+    def _file_input(self, control):
+        # The element itself is the key: cv.lv gives the CV and the letter inputs the same id and name.
+        key = control.id
+        if key in self.uploaded:
+            return
+        # LinkedIn hides the file input itself behind an upload button, so check its container.
+        label = self.label_for(control) if control.get_attribute("id") else None
+        shown = (visible(control) or visible(control.find_element(By.XPATH, ".."))
+                 or (label is not None and visible(label)))
+        question = clean_question(question_text(self.driver, control)) or "file upload"
+        # A drop zone's own label says only "browse"; the heading of its section says what goes there.
+        section = self.driver.execute_script(
+            # Only a heading written before the upload counts: a later one belongs to the next question.
+            "const input = arguments[0]; let el = input;"
+            " for (let i = 0; i < 14 && el && el.tagName !== 'FORM'; i++, el = el.parentElement) {"
+            "  const before = [...el.querySelectorAll('h1, h2, h3, h4, h5, h6, legend')].filter(h => h.innerText.trim()"
+            "   && (h.contains(input) || (h.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING)));"
+            "  if (before.length) return before[before.length - 1].innerText.trim(); } return '';", control) or ""
+        if section and section.lower() not in question.lower():
+            question = f"{clean_question(section)}: {question}"
+        accept = (control.get_attribute("accept") or "").lower()
+        names = f"{control.get_attribute('id') or ''} {control.get_attribute('name') or ''}"
+        if not shown and not re.search(r"resume|\bcv\b|curriculum|cover|letter|attach|document|pdf|\.doc|"
+                                       r"dzīvesgāj|резюме|vēstul|письм", f"{names} {accept} {question}".lower()):
+            # Career sites hide a document input behind their own button (Breezy's "cResume"); Chrome
+            # still takes a file for it. Other hidden inputs are left alone.
+            return
+        if (accept and all(kind.strip().startswith("image") for kind in accept.split(","))) or re.search(
+                r"photo|foto|фото|picture|attēl|avatar", f"{question} {names}".lower()):
+            return  # A profile photo: the CV never goes there, and no photo is sent.
+        kind = "cover" if has_words(question + " " + names, "cover") else "cv"
+        path = self.files.get("cover_letter" if kind == "cover" else "cv")
+        if kind in self.uploaded or not path:
+            if not path and is_required(self.driver, control, question):
+                self.unanswered(question)
+            return
+        if not self.plan:
             control.send_keys(str(Path(path).resolve()))
-            self.uploaded.add(key)
-            self.record(question, Path(path).name, "file")
             pause(2, 3)
+        self.uploaded.update((kind, key))
+        self.record(question, Path(path).name, "file")
 
     def _radios(self, box):
         self._radio_fieldsets(box)
         self._radio_groups(box)
+
+    def group_question(self, controls, choices):
+        """The question of a group of options: the nearest text above its first option, looking in the
+        smallest container of the group and then a few containers further out."""
+        return (self.driver.execute_script(
+            "const inputs = arguments[0], options = arguments[1]; let el = inputs[0];"
+            " while (el.parentElement && !inputs.every(r => el.contains(r))) el = el.parentElement;"
+            " let fallback = '';"
+            " for (let i = 0; i < 4 && el; i++, el = el.parentElement) {"
+            "   const lines = el.innerText.split('\\n').map(s => s.trim()).filter(Boolean);"
+            "   const first = lines.findIndex(line => options.includes(line));"
+            "   if (first > 0) return lines[first - 1];"
+            "   if (!fallback && first < 0) fallback = lines.find(line => !options.includes(line)) || ''; }"
+            " return fallback;", controls, list(choices)) or "")
+
+    def _checkbox_groups(self, box):
+        """Checkbox lists of one question ("Which countries can you work in?"): ticks the option the answer names.
+
+        Returns the names of the groups, so that _checkboxes leaves their boxes alone.
+        """
+        groups = {}
+        for control in box.find_elements(By.CSS_SELECTOR, "input[type='checkbox']"):
+            if control.get_attribute("name"):
+                groups.setdefault(control.get_attribute("name"), []).append(control)
+        handled = set()
+        for name, controls in groups.items():
+            if len(controls) < 2:
+                continue
+            handled.add(name)
+            if any(control.is_selected() for control in controls):
+                continue
+            choices = dict(self.option_label(control) for control in controls)
+            if not any(visible(target) for target in choices.values()):
+                continue
+            raw = self.group_question(controls, choices)
+            question = clean_question(raw)
+            required = any(control.get_attribute("required") for control in controls) or bool(re.search(r"[*✱]", raw))
+            if not question or question in choices:
+                if required:
+                    self.unanswered(question or "a list of options without a readable question")
+                continue
+            value, source = self.answer(question, "choice", list(choices), required)
+            if value is None:
+                if required:
+                    self.unanswered(question)
+                continue
+            if not self.plan:
+                click(self.driver, choices[value])
+            self.record(question, value, source)
+        return handled
 
     def _radio_groups(self, box):
         """Radio buttons outside a fieldset, grouped by name (Lever and other career sites)."""
@@ -312,15 +477,10 @@ class FormFiller:
             choices = dict(self.option_label(radio) for radio in radios)
             if not any(visible(target) for target in choices.values()):
                 continue
-            # The question is the group's container text before its first option.
-            raw = (self.driver.execute_script(
-                "const radios = arguments[0]; let el = radios[0];"
-                " while (el.parentElement && !radios.every(r => el.contains(r))) el = el.parentElement;"
-                " for (let i = 0; i < 3 && el.parentElement; i++) {"
-                "   el = el.parentElement; const lines = el.innerText.split('\\n').map(s => s.trim()).filter(Boolean);"
-                "   const first = lines.find(line => !arguments[1].includes(line)); if (first) return first; }"
-                " return '';", radios, list(choices)) or "")
+            raw = self.group_question(radios, choices)
             question = clean_question(raw)
+            if has_words(question, "resume") or (radios[0].get_attribute("name") or "").lower() in ("cv", "resume"):
+                continue  # A list of CVs saved on the site; the tailored CV is uploaded instead.
             required = any(radio.get_attribute("required") for radio in radios) or bool(re.search(r"[*✱]", raw))
             if not question or question in choices:
                 if required:
@@ -331,7 +491,8 @@ class FormFiller:
                 if required:
                     self.unanswered(question)
                 continue
-            click(self.driver, choices[value])
+            if not self.plan:
+                click(self.driver, choices[value])
             self.record(question, value, source)
 
     def _radio_fieldsets(self, box):
@@ -345,7 +506,7 @@ class FormFiller:
                     has_words(label_of(button), "upload") for button in fieldset.find_elements(By.CSS_SELECTOR, "button")):
                 continue  # The list of uploaded CVs; the upload above selects the tailored one.
             choices = dict(self.option_label(radio) for radio in radios)
-            required = not re.search(r"optional|neobligāt|необязательн", question.lower())
+            required = not any(word in question.lower() for word in OPTIONAL)
             if not question or question in choices:
                 if required:
                     self.unanswered(question or "a choice without a readable question")
@@ -355,7 +516,8 @@ class FormFiller:
                 if required:
                     self.unanswered(question)
                 continue
-            click(self.driver, choices[value])
+            if not self.plan:
+                click(self.driver, choices[value])
             self.record(question, value, source)
 
     def _selects(self, box):
@@ -363,38 +525,55 @@ class FormFiller:
             if not visible(control):
                 continue
             select = Select(control)
-            current = (select.first_selected_option.text or "").strip().lower()
-            if current and not current.startswith(SELECT_PLACEHOLDERS):
+
+            def placeholder(option):
+                # "Select...", "-- Izvēlieties --" or an option without a value stands for "nothing chosen".
+                text = (option.text or "").strip().lower()
+                return not text or text.startswith(SELECT_PLACEHOLDERS) or option.get_attribute("value") == ""
+
+            try:
+                chosen = select.first_selected_option
+            except NoSuchElementException:
+                chosen = None  # nothing selected yet (some lists start without even a placeholder)
+            if chosen is not None and not placeholder(chosen):
                 continue
-            question = clean_question(question_text(self.driver, control))
-            options = [o.text.strip() for o in select.options
-                       if o.text.strip() and not o.text.strip().lower().startswith(SELECT_PLACEHOLDERS)]
-            required = is_required(self.driver, control, question)
+            raw = question_text(self.driver, control)
+            question = with_hint(control, clean_question(raw))
+            options = [o.text.strip() for o in select.options if not placeholder(o)]
+            if not question and sum(bool(re.search(r"\+\d{1,3}\b", option)) for option in options) > len(options) / 2:
+                question = "Phone country code"  # an unlabelled list of dialling codes next to the phone box
+            required = is_required(self.driver, control, question) or bool(re.search(r"[*✱]", raw))
             value, source = self.answer(question, "choice", options, required)
             if value is None:
                 if required:
                     self.unanswered(question)
                 continue
-            select.select_by_visible_text(value)
+            if not self.plan:
+                select.select_by_visible_text(value)
             self.record(question, value, source)
 
     def _texts(self, box):
         selector = ("input:not([type='hidden']):not([type='radio']):not([type='checkbox']):not([type='file'])"
                     ":not([type='submit']):not([type='button']), textarea")
         for control in box.find_elements(By.CSS_SELECTOR, selector):
-            if not visible(control) or (control.get_attribute("value") or "").strip():
+            if not visible(control) or (control.get_attribute("value") or "").strip() or trap(self.driver, control) \
+                    or self.skip_text(control):
                 continue
-            question = clean_question(question_text(self.driver, control))
+            raw = question_text(self.driver, control)
+            question = with_hint(control, clean_question(raw))
             if control.get_attribute("role") == "combobox" and control.get_attribute("aria-autocomplete") != "none" \
                     and self._combobox(control, question):
                 continue
             kind = "number" if (control.get_attribute("type") == "number"
                                 or "numeric" in (control.get_attribute("id") or "")) else (
                 "long_text" if control.tag_name == "textarea" else "text")
-            required = is_required(self.driver, control, question)
+            required = is_required(self.driver, control, question) or bool(re.search(r"[*✱]", raw))
             if has_words(question, "cover") or (kind == "long_text" and re.search(
-                    r"motivation|why (do you want|are you interested)|tell us about yourself|message to|"
-                    r"anything else|additional information", question.lower()) and self.files.get("cover_letter_text")):
+                    r"motivation|why (do you want|are you interested|you would be|you are)|(perfect|good|great) fit|"
+                    r"tell us about yourself|message to|"
+                    r"anything else|additional information|kāpēc|motivāc|papildu informāc|komentār|ziņ[au]|"
+                    r"par sevi|почему|мотивац|дополнительн|комментар|сообщени|о себе|miks|kodėl",
+                    question.lower()) and self.files.get("cover_letter_text")):
                 # The checked, job-specific letter goes into every cover-letter style field.
                 value, source = self.files.get("cover_letter_text"), "cover_letter"
             else:
@@ -402,6 +581,9 @@ class FormFiller:
             if value is None:
                 if required:
                     self.unanswered(question)
+                continue
+            if self.plan:
+                self.record(question, value, source)
                 continue
             control.clear()
             control.send_keys(str(value))
@@ -417,6 +599,10 @@ class FormFiller:
                     control.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
             self.record(question, value, source)
             pause(0.3, 0.8)
+
+    def skip_text(self, control):
+        """A text box that a site-specific filler handles itself (Workday's search lists)."""
+        return False
 
     def visible_options(self, control):
         listbox_id = control.get_attribute("aria-controls") or control.get_attribute("aria-owns")
@@ -444,11 +630,13 @@ class FormFiller:
         texts = [option.text.strip() for option in options]
         required = is_required(self.driver, control, question)
         value, source = self.answer(question, "choice", texts, required)
-        if value is None:
+        if value is None or self.plan:
             control.send_keys(Keys.ESCAPE)
-            if required:
+            if value is None and required:
                 self.unanswered(question)
             self.uploaded.add(key)
+            if value is not None:
+                self.record(question, value, source)
             return True
         click(self.driver, options[texts.index(value)])
         self.uploaded.add(key)
@@ -469,8 +657,10 @@ class FormFiller:
                     return
         self.driver.execute_script("arguments[0].click();", control)
 
-    def _checkboxes(self, box):
+    def _checkboxes(self, box, grouped=()):
         for control in box.find_elements(By.CSS_SELECTOR, "input[type='checkbox']"):
+            if control.get_attribute("name") in grouped:
+                continue
             label = self.label_for(control)
             # The 2026 dialog leaves the checkbox label empty and puts its text in a neighbouring element.
             text = ((label.get_attribute("textContent") or "").strip() if label is not None else "") \
@@ -480,7 +670,7 @@ class FormFiller:
             question = clean_question(text)
             if has_words(question, "follow"):
                 # Following the company is not part of applying.
-                if control.is_selected():
+                if control.is_selected() and not self.plan:
                     self.toggle(control, label)
                     self.record(question, "unchecked" if not control.is_selected() else "still checked", "rule")
                 continue
@@ -488,10 +678,12 @@ class FormFiller:
                 continue
             if control.is_selected() or not is_required(self.driver, control, question):
                 continue
-            value, source = self.answer(question, "choice", ["Yes", "No"], True)
+            value, source = self.answer(question, "checkbox", ["Yes", "No"], True)
             if value != "Yes":
                 self.unanswered(question)
-            self.toggle(control, label)
+                continue
+            if not self.plan:
+                self.toggle(control, label)
             self.record(question, "checked", source)
 
 

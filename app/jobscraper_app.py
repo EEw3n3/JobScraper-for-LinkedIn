@@ -32,8 +32,16 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 REASONS = [
     (r"No truthful answer for required question: (.*)", "Form question",
      "The form asks: \"{0}\". Your profile and CV have no truthful answer, so the app did not make one up."),
+    (r"workday: sign in", "Workday: sign in",
+     "A Workday site: sign in on this employer's site first. Press the Workday button at the top: the app opens "
+     "the site, you sign in (Sign in with email), and the app fills in the form."),
     (r"CAPTCHA", "CAPTCHA", "The site showed a CAPTCHA. The app does not solve CAPTCHAs; submit this one yourself."),
     (r"needs an applicant account", "Account needed", "The company site requires a candidate account."),
+    (r"sends a code to your e-mail", "Code by e-mail",
+     "The site first e-mails a confirmation code. The app does not enter codes; submit this one yourself."),
+    (r"cv\.lv: the uploaded (.*) did not appear", "File not attached",
+     "cv.lv did not show the uploaded file {0} in its list, so the application was not sent."),
+    (r"cv\.lv: the application form did not open", "Form did not open", "The cv.lv application form did not open."),
     (r"no CV upload found", "No CV field",
      "The page has no CV upload field; it is probably not the application form itself."),
     (r"special application instructions", "Task in the ad",
@@ -93,6 +101,10 @@ def ensure_hidden_column():
             pass
 
 
+# Each site's applications stay apart: the app shows one site at a time.
+SITE_FILTER = {"cvlv": " AND link LIKE '%cv.lv%'", "linkedin": " AND link NOT LIKE '%cv.lv%'"}
+
+
 def first_line(text):
     return (text or "").strip().splitlines()[0].strip() if (text or "").strip() else ""
 
@@ -117,19 +129,24 @@ class Api:
             "gmail": (ROOT / "secrets" / "gmail_token.json").exists(),
         }
 
-    def start(self, dry_run=False, skip_scrape=False, mail_only=False):
+    def start(self, dry_run=False, skip_scrape=False, mail_only=False, workday=False, site=None):
         if self.process is not None and self.process.poll() is None:
             return {"ok": False, "error": "A run is already in progress"}
         if not PYTHON.exists():
             return {"ok": False, "error": f"Python environment not found: {PYTHON}"}
         argv = [str(PYTHON), "-u", "main.py", "run-all"]
-        if mail_only:
+        if workday:
+            # Workday jobs from earlier runs: each site opens and waits while the applicant signs in.
+            argv = [str(PYTHON), "-u", "main.py", "apply", "--workday"] + (["--dry-run"] if dry_run else [])
+        elif mail_only:
             # Only sorts Gmail: nothing is collected, scored or sent.
             argv.append("--mail-only")
         elif dry_run:
             argv.append("--dry-run")
         if skip_scrape:
             argv.append("--skip-scrape")
+        if site in SITE_FILTER and not mail_only:
+            argv += ["--source", site]
         env = {**os.environ, "JOBSCRAPER_PROGRESS": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
         self.process = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, text=True,
@@ -165,10 +182,10 @@ class Api:
         return {"ok": True}
 
     # ---- lists ------------------------------------------------------------------------
-    def manual_list(self):
+    def manual_list(self, site=None):
         ensure_hidden_column()
         rows = query("SELECT * FROM applications WHERE status IN ('needs_manual', 'external') "
-                     "AND hidden_at IS NULL ORDER BY updated_at DESC LIMIT 200")
+                     "AND hidden_at IS NULL" + SITE_FILTER.get(site, "") + " ORDER BY updated_at DESC LIMIT 200")
         items = []
         for row in rows:
             label, text = human_reason(row.get("reason"), row["status"])
@@ -178,18 +195,19 @@ class Api:
                           "updated": row.get("updated_at") or "", "cv_pdf": row.get("cv_pdf") or ""})
         return items
 
-    def applied_list(self):
+    def applied_list(self, site=None):
         ensure_hidden_column()
         rows = query("SELECT * FROM applications WHERE status IN ('applied', 'unconfirmed') "
-                     "AND hidden_at IS NULL ORDER BY updated_at DESC LIMIT 200")
+                     "AND hidden_at IS NULL" + SITE_FILTER.get(site, "") + " ORDER BY updated_at DESC LIMIT 200")
         return [{"link": r["link"], "title": first_line(r["title"]), "company": r.get("company") or "",
                  "score": r.get("score"), "updated": r.get("updated_at") or "", "ats": r.get("ats") or "",
                  "manual": (r.get("reason") or "") == "Applied manually", "cv_pdf": r.get("cv_pdf") or ""}
                 for r in rows]
 
-    def today(self):
+    def today(self, site=None):
         start = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
-        rows = query("SELECT status, COUNT(*) AS n FROM applications WHERE updated_at >= ? GROUP BY status", (start,))
+        rows = query("SELECT status, COUNT(*) AS n FROM applications WHERE updated_at >= ?" + SITE_FILTER.get(site, "")
+                     + " GROUP BY status", (start,))
         return {row["status"]: row["n"] for row in rows}
 
     # ---- actions ----------------------------------------------------------------------

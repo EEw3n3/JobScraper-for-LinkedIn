@@ -44,6 +44,14 @@ class PipelineTests(unittest.TestCase):
             picked = pipeline.candidates(rows, self.log, 60, submit=True)
         self.assertEqual([row["link"] for row in picked], ["lv", "lt", "ee", "remote"])
 
+    def test_daily_limit_is_counted_per_site(self):
+        self.log.save("https://www.linkedin.com/jobs/view/1", title="A", status="applied")
+        self.log.save("https://www.cv.lv/lv/vacancy/2", title="B", status="applied")
+        self.log.save("https://www.cv.lv/lv/vacancy/3", title="C", status="unconfirmed")
+        self.assertEqual(self.log.submitted_last_day(), 3)
+        self.assertEqual(self.log.submitted_last_day("linkedin"), 1)
+        self.assertEqual(self.log.submitted_last_day("cvlv"), 2)
+
     def test_ready_jobs_wait_for_submit_mode(self):
         self.log.save("a", status="ready")
         self.log.save("b", status="needs_manual")

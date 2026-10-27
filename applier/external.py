@@ -13,6 +13,7 @@ from selenium.common.exceptions import (ElementClickInterceptedException, Elemen
                                         WebDriverException)
 from selenium.webdriver.common.by import By
 
+from applier import vocabulary
 from applier.easy_apply import FormFiller, NeedsManual, click, label_of, pause, save_failure, visible
 
 ATS = {
@@ -29,27 +30,26 @@ ATS = {
     "cvlv": ("cv.lv", "cvmarket.lv"),
 }
 # These need an applicant account per employer; the program does not create accounts.
-ACCOUNT_REQUIRED = ("workday",)
-SUBMIT_WORDS = ("submit application", "submit your application", "submit", "send application", "send",
-                "apply now", "iesniegt", "nosūtīt", "отправить", "pieteikties")
-NEXT_WORDS = ("next", "continue", "turpināt", "tālāk", "далее", "продолжить")
-START_WORDS = ("apply for this job", "apply now", "apply", "pieteikties", "откликнуться", "подать заявку")
-DONE_WORDS = ("thank you for applying", "thanks for applying", "application has been received", "application received",
-              "application was submitted", "application submitted", "we have received your application",
-              "successfully submitted", "paldies par pieteikumu", "pieteikums ir saņemts", "спасибо за отклик",
-              "заявка отправлена")
-LOGIN_WORDS = ("sign in to apply", "create an account", "log in to apply", "create account")
-# Cookie banners: only the most privacy-preserving choice is ever clicked.
-COOKIE_DECLINE = ("reject all", "decline all", "reject", "decline", "only necessary", "necessary only",
-                  "use necessary", "allow necessary", "essential only", "deny", "noraidīt", "atteikties",
-                  "tikai nepieciešam", "отклонить", "только необходимые")
+ACCOUNT_REQUIRED = ("workday", "successfactors", "taleo", "icims", "njoyn")
+# Career sites on the employer's own domain still show their ATS in the page source.
+PAGE_ATS = {"successfactors": ("successfactors.com", "successfactors.eu", "sapsf"),
+            "taleo": ("taleo.net",), "icims": ("icims.com",), "njoyn": ("njoyn.com",),
+            "teamtailor": ("teamtailor-cdn", "teamtailor.com"), "recruitee": ("recruitee.com",),
+            "greenhouse": ("boards.greenhouse.io", "job-boards.greenhouse.io"), "lever": ("jobs.lever.co",)}
+# The words in every language live in applier/vocabulary.py.
+SUBMIT_WORDS = vocabulary.SUBMIT
+NEXT_WORDS = vocabulary.NEXT
+START_WORDS = vocabulary.APPLY
+DONE_WORDS = vocabulary.DONE
+LOGIN_WORDS = vocabulary.LOGIN
+COOKIE_DECLINE = vocabulary.COOKIE_DECLINE
 
 
 def decline_cookies(driver):
     for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
         in_banner = driver.execute_script(
             "let el = arguments[0]; for (let i = 0; i < 6 && el; i++, el = el.parentElement) {"
-            " if (/cookie|sīkdatn|куки|consent/i.test((el.getAttribute('aria-label') || '') + ' ' + el.id + ' '"
+            " if (/cookie|sīkdatn|sīkfail|куки|cookie-файл|consent|küpsis|slapuk/i.test((el.getAttribute('aria-label') || '') + ' ' + el.id + ' '"
             " + el.className + ' ' + (i > 1 ? el.innerText.slice(0, 400) : ''))) return true; } return false;", element)
         if in_banner and any(word in text for word in COOKIE_DECLINE):
             try:
@@ -69,16 +69,24 @@ def detect_ats(url):
     return "other"
 
 
+ROBOT_CHECK = re.compile(r"not a robot|verify (that )?you are (a )?human|are you a robot|nevis robots|neesat robots|"
+                         r"pārliecināti, ka tas esat jūs|не робот|подтвердите, что вы человек|ei ole robot", re.I)
+
+
 def captcha_challenge(driver):
-    """A visible CAPTCHA puzzle. Invisible checks that pass on their own are not reported."""
+    """A visible CAPTCHA puzzle or a bot-check page. Invisible checks that pass on their own are not reported."""
     for frame in driver.find_elements(By.CSS_SELECTOR, "iframe[src*='hcaptcha'], iframe[src*='recaptcha'], "
-                                                       "iframe[src*='challenges.cloudflare'], iframe[title*='captcha' i]"):
+                                                       "iframe[src*='challenges.cloudflare'], iframe[title*='captcha' i], "
+                                                       "iframe[src*='captcha-delivery'], iframe[src*='datadome']"):
         try:
             size = frame.size
         except WebDriverException:
             continue
         if visible(frame) and size.get("height", 0) > 100 and size.get("width", 0) > 100:
             return True
+    if not form_has_fields(driver):
+        # A full-page check ("we want to be sure you are not a robot") instead of the form.
+        return bool(ROBOT_CHECK.search(driver.find_element(By.TAG_NAME, "body").text[:3000]))
     return False
 
 
@@ -95,11 +103,15 @@ def form_container(driver):
     return best if best is not None and best_rank[1] >= 2 else driver.find_element(By.TAG_NAME, "body")
 
 
-def action_buttons(box):
+def action_buttons(box, include_disabled=False):
+    """(text, element) of the visible buttons; include_disabled also keeps buttons that unlock once the
+    form is filled (the form check looks at a form it does not fill)."""
     found = []
-    for element in box.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], a[role='button']"):
+    # PeopleHR and other older forms make their Next button a styled link.
+    for element in box.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], input[type='button'], "
+                                                      "a[role='button'], a.button, a.btn"):
         try:
-            if visible(element) and element.is_enabled():
+            if visible(element) and (include_disabled or element.is_enabled()):
                 text = " ".join(filter(None, (label_of(element), element.get_attribute("value") or ""))).lower()
                 found.append((text, element))
         except StaleElementReferenceException:
@@ -107,13 +119,23 @@ def action_buttons(box):
     return found
 
 
-def form_action(box):
-    """The step's main button: ('submit', el), ('next', el) or (None, None)."""
-    buttons = action_buttons(box)
+def clickable(text):
+    """Not a draft, sign-in, social-apply or back button, which the applier never presses."""
+    return not any(word in text for word in vocabulary.NEVER_CLICK)
+
+
+def form_action(box, include_disabled=False):
+    """The step's main button: ('submit', el), ('next', el) or (None, None).
+
+    Words are tried in their list order, so "Submit application" wins over a "Register" elsewhere.
+    """
+    buttons = [(text, element) for text, element in action_buttons(box, include_disabled)
+               if clickable(text) and "cookie" not in text]
     for key, words in (("submit", SUBMIT_WORDS), ("next", NEXT_WORDS)):
-        for text, element in buttons:
-            if any(word in text for word in words) and "cookie" not in text:
-                return key, element
+        for word in words:
+            for text, element in buttons:
+                if word in text:
+                    return key, element
     typed = [element for _, element in buttons if (element.get_attribute("type") or "") == "submit"]
     return ("submit", typed[-1]) if typed else (None, None)
 
@@ -130,8 +152,10 @@ def open_form(driver, url):
     driver.get(url)
     pause(3, 5)
     decline_cookies(driver)
-    page = driver.find_element(By.TAG_NAME, "body").text.lower()
-    if ats in ACCOUNT_REQUIRED or any(word in page for word in LOGIN_WORDS):
+    if ats == "other":
+        source = driver.page_source.lower()
+        ats = next((name for name, markers in PAGE_ATS.items() if any(marker in source for marker in markers)), ats)
+    if ats in ACCOUNT_REQUIRED:
         raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself")
     # On a company's own page the Greenhouse form can sit in an embedded iframe.
     if not form_has_fields(driver):
@@ -141,28 +165,148 @@ def open_form(driver, url):
             driver.switch_to.frame(frames[0])
             return "greenhouse"
     if not form_has_fields(driver):
-        for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
-            if any(text.strip().startswith(word) for word in START_WORDS):
-                element.click()
+        for text, element in start_buttons(driver):
+            if clickable(text) and any(text.strip().startswith(word) for word in START_WORDS):
+                windows = set(driver.window_handles)
+                click(driver, element)
                 pause(2, 4)
+                opened = [handle for handle in driver.window_handles if handle not in windows]
+                if opened:
+                    # Some job pages open the form in a new tab; close_extra_tabs closes it afterwards.
+                    driver.switch_to.window(opened[0])
+                    pause(2, 3)
+                decline_cookies(driver)
                 break
+    if not form_has_fields(driver):
+        switch_to_form_frame(driver)
+    if not form_has_fields(driver):
+        # Only a page without a form counts: many career sites show "Create account" in the header.
+        page = driver.find_element(By.TAG_NAME, "body").text.lower()
+        if any(word in page for word in LOGIN_WORDS):
+            raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself")
     return ats
 
 
+def start_buttons(driver):
+    """Buttons and plain links of a job page, as (text, element); career sites often make "Apply" a link.
+
+    The site's header, menu and footer are left out: their "Apply" usually leads to a general sign-up.
+    """
+    found = action_buttons(driver.find_element(By.TAG_NAME, "body"))
+    # TalentLyft's "Apply" is a link without an address that only runs a script.
+    for element in driver.find_elements(By.CSS_SELECTOR, "a[href], a[onclick]"):
+        try:
+            href = (element.get_attribute("href") or "").lower()
+            if visible(element) and not href.startswith(("mailto:", "tel:")):
+                text = " ".join(filter(None, (label_of(element), element.get_attribute("title") or ""))).lower()
+                if text:
+                    found.append((text, element))
+        except StaleElementReferenceException:
+            continue
+    inside = [(text, element) for text, element in found if not driver.execute_script(
+        "return !!arguments[0].closest('header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]')",
+        element)]
+    # Main content first; the header's buttons stay as a last choice for pages that have no other.
+    return inside + [pair for pair in found if pair not in inside]
+
+
+EMAIL_ONLY = re.compile(r"(send|e-?mail|submit) (us )?(your )?(cv|resume|application)[^.]{0,40}\b(to|at)\b[^.]{0,40}@|"
+                        r"sūt\w* (savu |jūsu |tavu )?(cv|pieteikumu)[^.]{0,40}e-?past|"
+                        r"отправ\w* (ваше |своё )?(резюме|cv)[^.]{0,40}(почт|e-?mail)", re.I)
+
+
+def no_form_reason(driver):
+    """Why a page without an application form has none: "closed" (the job is filled or expired),
+    "email" (the employer asks for the CV by e-mail), else None."""
+    if form_has_fields(driver):
+        return None
+    page = driver.find_element(By.TAG_NAME, "body").text
+    if any(word in page.lower() for word in vocabulary.CLOSED):
+        return "closed"
+    return "email" if EMAIL_ONLY.search(page) else None
+
+
+def account_form(driver):
+    """A visible password box: the site wants a sign-in or a new account, which the applier never makes."""
+    return any(visible(element) for element in driver.find_elements(By.CSS_SELECTOR, "input[type='password']"))
+
+
+def switch_to_form_frame(driver):
+    """Enter an embedded application form (an iframe from the employer's ATS), if the page has one."""
+    for frame in driver.find_elements(By.CSS_SELECTOR, "iframe"):
+        source = (frame.get_attribute("src") or "").lower()
+        if not visible(frame) or re.search(r"captcha|challenges\.cloudflare|youtube|vimeo|google\.com/maps|facebook",
+                                           source):
+            continue
+        # A lazy frame (workingday.lv) or a form loaded by a script (Teamdash on pasts.lv) shows its fields
+        # only once it is scrolled into view and has had a moment to load.
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", frame)
+        for attempt in range(2):
+            if attempt or frame.get_attribute("loading") == "lazy":
+                pause(2, 3)
+            try:
+                driver.switch_to.frame(frame)
+            except WebDriverException:
+                break
+            if form_has_fields(driver):
+                return True
+            driver.switch_to.default_content()
+    return False
+
+
 def form_has_fields(driver):
-    return len([e for e in driver.find_elements(By.CSS_SELECTOR, "input[type='email'], input[type='file'], textarea")
-                if visible(e) or e.get_attribute("type") == "file"]) >= 1
+    """An application form is showing: a visible e-mail box, text area or upload (an upload's own input is
+    often hidden behind a button, so its container counts). Newsletter boxes and site headers do not count."""
+    for element in driver.find_elements(By.CSS_SELECTOR, "input[type='email'], input[type='file'], textarea"):
+        try:
+            shown = visible(element) or (element.get_attribute("type") == "file"
+                                         and visible(element.find_element(By.XPATH, "..")))
+            if shown and not driver.execute_script(
+                    "const el = arguments[0];"
+                    " if (el.closest('header, nav, footer, [role=banner], [role=contentinfo]')) return true;"
+                    # Dropzone's spare upload box sits hidden at the end of the page, outside any form.
+                    " if (el.type === 'file' && (el.parentElement === document.body"
+                    "     || el.classList.contains('dz-hidden-input'))) return true;"
+                    " const f = el.closest('form') || el.parentElement;"
+                    # A form kept hidden until "Apply" is pressed (TalentLyft) is not showing yet.
+                    " if (f && !f.getClientRects().length) return true;"
+                    " return /subscri|newsletter|search|jaunum|рассылк/i.test("
+                    "   [el.name, el.id, f && f.id, f && f.className, f && f.getAttribute('action')].join(' '));",
+                    element):
+                return True
+        except (StaleElementReferenceException, NoSuchElementException):
+            continue
+    return False
 
 
-def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_steps=8):
-    """Fill the employer's form; return (status, answers, ats) like run_application."""
+def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_steps=8, login_wait=0, say=print):
+    """Fill the employer's form; return (status, answers, ats) like run_application.
+
+    login_wait: seconds to wait for the applicant to sign in on a Workday site (0 stops at its sign-in step).
+    """
+    from applier import workday
+
+    if workday.is_workday(url):
+        return workday.run_workday(driver, url, answer_fn, files, submit, screenshot_path, login_wait, say=say)
     ats = open_form(driver, url)
+    reason = no_form_reason(driver)
+    if reason == "closed":
+        return "closed", [], ats
+    if reason == "email":
+        # Sending e-mails on the applicant's behalf is left to the applicant.
+        raise NeedsManual(f"{ats}: the employer takes applications by e-mail only; send your CV yourself")
     filler = FormFiller(driver, answer_fn, files)
     last_errors = None
     try:
         for _ in range(max_steps):
             if captcha_challenge(driver):
                 raise NeedsManual(f"{ats}: CAPTCHA on the form; finish this application yourself", filler.log)
+            page = driver.find_element(By.TAG_NAME, "body").text.lower()
+            if any(word in page for word in vocabulary.EMAIL_CODE):
+                raise NeedsManual(f"{ats}: the site first sends a code to your e-mail; finish this application yourself",
+                                  filler.log)
+            if account_form(driver):
+                raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself", filler.log)
             filler.fill(form_container(driver))
             # React forms (Greenhouse) re-render after an upload, so look the form up again.
             action, target = form_action(form_container(driver))

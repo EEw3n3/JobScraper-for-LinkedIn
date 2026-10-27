@@ -307,3 +307,83 @@ button.ok:hover { background: #213434; }
 .mail-btn svg { width: 16px; height: 16px; }
 .mail-btn:disabled { opacity: .45; cursor: default; }
 .mail-btn:disabled:hover { background: none; }
+
+/* ---------- two sites, two workspaces ------------------------------------------------
+   body[data-site] picks the site. LinkedIn keeps the cool "data terminal" look with the run on the left;
+   cv.lv is a warm, rounder workspace in the same layout. */
+.site-switch { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 22px; border-radius: 999px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); align-self: flex-start; }
+.site-tab { display: inline-flex; align-items: center; gap: 9px; height: 34px; padding: 0 16px 0 6px; border-radius: 999px;
+  color: var(--muted); font-weight: 600; font-size: 13px; transition: background .2s, color .2s; }
+.site-tab:hover { color: var(--text); }
+.site-tab.active { background: var(--raised); color: var(--text); }
+.site-mark { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px;
+  font-weight: 800; letter-spacing: -.02em; background: var(--control); color: var(--soft); text-transform: lowercase;
+  transition: background .2s, color .2s; }
+.site-tab.active .site-mark { background: var(--accent); color: var(--on-accent); }
+/* A pulsing dot marks the site whose run is going, so it shows from the other site too. */
+.site-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); display: none; }
+.site-tab.busy .site-dot { display: block; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.start:disabled { opacity: .4; cursor: default; }
+.start:disabled:hover { background: var(--text); }
+
+body[data-site="linkedin"] {
+  --ground: #11151c; --surface: #0d1117; --raised: #1a212b; --border: #1d2430; --rule: #171d26; --control: #2f3a4a;
+  --soft: #aeb8c6; --muted: #7f8a9a; --accent: #4a8ad6; --on-accent: #ffffff;
+  --pill-neutral-bg: #1a212b;
+}
+
+body[data-site="cvlv"] {
+  --ground: #16120e;
+  --surface: #1d1813;
+  --raised: #2a221a;
+  --border: #2e261d;
+  --rule: #272019;
+  --control: #4a3d2f;
+  --text: #fbf4ea;
+  --soft: #cdbfae;
+  --muted: #9a8a78;
+  --accent: #f08c3a;
+  --on-accent: #1b1208;
+  --positive: #7cb46b;
+  --pill-positive-bg: #1f2a1a; --pill-positive-ink: #93cd80;
+  --pill-warning-bg: #33250f; --pill-warning-ink: #f2b552;
+  --pill-neutral-bg: #2a221a; --pill-neutral-ink: #d9cbb9;
+  --radius-card: 18px;
+  --shadow: 0 18px 40px rgba(0, 0, 0, .28);
+  font-family: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(1200px 600px at 100% -10%, rgba(240, 140, 58, .10), transparent 60%), var(--ground);
+}
+body[data-site="cvlv"] h1 { font-size: 30px; font-weight: 800; letter-spacing: -.025em; }
+body[data-site="cvlv"] .start { background: var(--accent); color: var(--on-accent); }
+body[data-site="cvlv"] .start:hover { background: #f6a15a; }
+body[data-site="cvlv"] .primary { background: var(--accent); color: var(--on-accent); }
+body[data-site="cvlv"] .primary:hover { background: #f6a15a; }
+body[data-site="cvlv"] .progress-card { border-top: 3px solid var(--accent); }
+body[data-site="cvlv"] .stage.active .node { background: #33240f; }
+body[data-site="cvlv"] .stage.active .r-track { stroke: #5a3a17; }
+body[data-site="cvlv"] .counters { gap: 8px; border-top: 0; margin-top: 16px; }
+body[data-site="cvlv"] .counter, body[data-site="cvlv"] .counter + .counter { padding: 12px 14px; border: 0;
+  border-radius: 12px; background: var(--raised); }
+body[data-site="cvlv"] .tabs { padding: 10px 14px 0; gap: 6px; border-bottom: 0; }
+body[data-site="cvlv"] .tab { padding: 8px 14px; border-radius: 999px; }
+body[data-site="cvlv"] .tab.active { background: var(--raised); }
+body[data-site="cvlv"] .tab.active::after { display: none; }
+body[data-site="cvlv"] .job { margin: 10px 0; padding: 16px; border: 0; border-radius: 14px; background: var(--raised); }
+body[data-site="cvlv"] .day { border-bottom: 0; color: var(--accent); }
+body[data-site="cvlv"] .log pre { background: #120e0a; border-radius: 12px; }
+body[data-site="cvlv"] .seg input:checked + span { border-bottom-width: 2px; }
+body[data-site="cvlv"] .chip { border-radius: 999px; }
+body[data-site="cvlv"] .modal-box { border-radius: 22px; }
+
+/* Switching sites replaces the whole screen: the old one slides and fades out, the new one slides in. */
+::view-transition-old(root) { animation: site-out .32s cubic-bezier(.4, 0, 1, 1) both; }
+::view-transition-new(root) { animation: site-in .48s cubic-bezier(.2, .8, .2, 1) both; }
+html[data-direction="back"]::view-transition-old(root) { animation-name: site-out-back; }
+html[data-direction="back"]::view-transition-new(root) { animation-name: site-in-back; }
+@keyframes site-out { to { opacity: 0; transform: translateX(-48px) scale(.985); } }
+@keyframes site-in { from { opacity: 0; transform: translateX(64px) scale(.985); } }
+@keyframes site-out-back { to { opacity: 0; transform: translateX(48px) scale(.985); } }
+@keyframes site-in-back { from { opacity: 0; transform: translateX(-64px) scale(.985); } }
+.title-text { flex: 1; min-width: 0; }

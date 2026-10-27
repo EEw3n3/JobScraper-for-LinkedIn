@@ -1,9 +1,10 @@
 # JobScraper for LinkedIn
 
-A Windows desktop tool for a job search on LinkedIn. It collects fresh vacancies for the roles you
-choose, scores each one against your CV with Google Gemini, tailors your CV and a cover letter to the
+A Windows desktop tool for a job search on LinkedIn and [cv.lv](https://www.cv.lv) (Latvia's largest
+job board). It collects fresh vacancies for the roles you choose, scores each one against your CV with Google Gemini, tailors your CV and a cover letter to the
 best matches without inventing anything, and fills in LinkedIn Easy Apply forms and common employer
-application forms (Lever, Greenhouse, Teamtailor and others). Optionally it sorts replies from
+application forms (Lever, Greenhouse, Teamtailor, Recruitee, Workday and others), as well as cv.lv's own
+application form. Optionally it sorts replies from
 employers in Gmail into labels.
 
 Everything runs on your own computer. Your CV, profile, results and LinkedIn session stay in local
@@ -26,7 +27,7 @@ folders that are excluded from git.
 The idea comes from [JobParser With Descriptions](https://github.com/Oldoge/JobParser-with-descriptions)
 by [Oldoge](https://github.com/Oldoge), which this project grew out of (job collection, resumable
 runs, Gemini scoring, reports and the home lab web panel). This version adds the desktop app, CV and
-cover letter tailoring, Easy Apply and employer-site applications, and Gmail sorting.
+cover letter tailoring, cv.lv, Easy Apply and employer-site applications, and Gmail sorting.
 
 ## Contents
 
@@ -200,12 +201,18 @@ Edit `config\settings.py`:
 - `LOCAL_LOOKBACK_HOURS`: how far back the location searches look (72 hours by default, since local
   markets post few jobs a day). The remote search uses `--lookback-hours` (24 by default).
 - `STOP_SENIOR_WORDS`: titles with these words are skipped (senior, lead, manager and so on).
+- `SOURCES`: the job sites a run collects from (`["LinkedIn", "cv.lv"]`). Remove `"cv.lv"` if you do
+  not look for work in Latvia.
+- `CVLV_CATEGORIES` and `CVLV_SKIP_TITLE_WORDS`: which cv.lv categories are read (IT by default) and
+  which titles in them are skipped (sales, marketing, design and so on).
 
 You can also pass `--role` and `--country` to `scrape` for a single run.
 
 ## Daily use
 
-**Desktop app.** Open `JobScraper.exe`, keep "Dry run" ticked for the first runs and click Start.
+**Desktop app.** Open `JobScraper.exe`, pick the site at the top (LinkedIn or cv.lv, Ctrl+1 / Ctrl+2), keep
+"Dry run" ticked for the first runs and click Start. Each site is its own workspace with its own look,
+progress, log, lists and daily limit; a run always collects from and applies to the chosen site only.
 A full run collects jobs, reads descriptions, scores them, sorts Gmail (if connected) and applies.
 "Send applications" skips collection and applies to the newest collected jobs. "Check mail" only sorts
 Gmail replies (offers, rejections, confirmations) and sends nothing. Jobs the tool could not finish appear under "Needs you" with
@@ -397,12 +404,55 @@ Greenhouse, Ashby, Workable, Teamtailor, SmartRecruiters, Recruitee, Personio, B
 generically) and filled with the same rules. Optional fields only get the applicant's own data; the
 model answers required questions only, and its free text must pass the same unsupported-term and
 buzzword checks as the CV summary. Cookie banners are only ever declined. A form without a CV upload
-is never submitted. Workday and other account-based sites, CAPTCHA challenges, and questions without a
-truthful answer stop as `needs_manual` for the applicant to finish. `apply --link <job id>` handles
+is never submitted. Workday waits for your sign-in (see below); other account-based sites, e-mailed
+codes, CAPTCHA challenges, and questions without a truthful answer stop as `needs_manual` for the
+applicant to finish. `apply --link <job id>` handles
 one job.
 
 Set `JOBPARSER_BROWSER_TESTS=1` to also run the Easy Apply flows (2024 and 2026 LinkedIn dialogs) and the
-Lever and Greenhouse imitations in `tests/fixtures` in headless Chrome.
+Lever, Greenhouse, cv.lv and Workday imitations in `tests/fixtures` in headless Chrome.
+
+### cv.lv
+
+```powershell
+python main.py login --site cvlv
+python main.py scrape --source cvlv
+```
+
+cv.lv has a public search API, so every active ad in `CVLV_CATEGORIES` is read without a browser and
+without signing in. Ads published only as a picture are read by Gemini; already scored ads keep their
+score in later runs, so the AI only sees new or changed ads. Signing in (`login --site cvlv`, same
+`browser_profile/`) is optional but adds two things: vacancies you saved on cv.lv are applied to first,
+whatever their score, and applications go through cv.lv's own form with your account (tailored CV,
+cover letter and the ad's screening questions). The form's "save and continue later" button is never
+pressed. Ads that link to an employer's site go through the employer-site flow below, and "How did you
+hear about us?" is answered with the site the job really came from.
+
+### Workday
+
+Workday career sites (`company.wd3.myworkdayjobs.com`) ask for an applicant account on every
+employer's site, and the tool never creates accounts or types passwords. A normal run stops at the
+sign-in step and lists the job under "Needs you". The Workday button in the app (or
+`python main.py apply --workday`) then opens each of those jobs in the browser window and waits up to
+five minutes (`--login-wait`) while you sign in or register on that employer's site; use "Sign in with
+email", since Google sign-in is usually blocked in a browser controlled by a program. After that the
+tool fills every step itself: My Information, My Experience with the tailored CV, Application
+Questions, Voluntary Disclosures and Review. Chrome can remember the password, so the next application
+to the same employer takes two clicks.
+
+### Form lab
+
+```powershell
+python tools/form_lab.py --cvlv
+python tools/form_lab.py --cvlv --ai --recheck results/form_lab/results.json
+python tools/form_lab.py https://example.com/careers/123
+```
+
+Opens real application forms in a throwaway headless Chrome and decides, without typing, uploading or
+submitting anything, what every field would get. A form is "ready" when it has a CV upload, a Submit or
+Next button and an answer for every required question. `results/form_lab/report.html` lists the
+platforms, the unanswered questions and a screenshot and the HTML of each form, which is how new form
+layouts get supported. `--per-host` (2 by default) and `--recheck` keep the number of visits low.
 
 ### Diagnostics And Tests
 

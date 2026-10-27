@@ -204,6 +204,11 @@ def _sentences(text):
     return [sentence for sentence in re.split(r"(?<=[.!?])\s+", text or "") if sentence.strip()]
 
 
+# The candidate's age stays out of every CV and letter.
+AGE = re.compile(r"\b\d{2}[- ]?(year|yr)s?[- ]old\b|\b\d{2} years of age\b|\b\d{2} gad\w* vec|\b\d{2}[- ]gadīg|"
+                 r"\bmy age\b|\b\d{2} (лет|года)\b", re.I)
+
+
 def summary_problems(text, cv=None):
     low = f" {text.lower()} "
     problems = [word for word in BUZZWORDS if word in low]
@@ -211,6 +216,8 @@ def summary_problems(text, cv=None):
         problems.append("lists target roles")
     if USER_COUNT.search(text):
         problems.append("mentions user numbers")
+    if AGE.search(text):
+        problems.append("mentions the age")
     if cv is not None:
         problems += [f"not based on the CV: {sentence}" for sentence in unsourced_sentences(text, cv)]
         original = _sentences(cv["summary"])
@@ -241,7 +248,7 @@ def tailor_prompt(cv, title, description):
         "dash, never '—' or '–', and never the '·' character.\n"
         f"Return JSON with: summary (3-4 sentences, at most {MAX_SUMMARY_WORDS} words, {language}, in the same "
         f"personal but plain voice as the original summary: {voice}no buzzwords such as 'proven track record', "
-        "'robust', 'scalable' or 'passionate'"
+        "'robust', 'scalable' or 'passionate'; never mention the candidate's age"
         + (f"; end with this sentence word for word: {original[-1]!r}" if len(original) > 1 else "")
         + "; build every other sentence from the wording of the original summary or of one CV bullet, keep "
         "project and employer names, and put the facts most relevant to the job first); "

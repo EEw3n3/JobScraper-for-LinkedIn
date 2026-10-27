@@ -22,6 +22,20 @@ SEARCH_ROLES = [
     "System%20Administrator",
 ]
 
+# Job sites a run collects from; `main.py scrape --source` overrides it for one run.
+# cv.lv is Latvia's largest job board; remove it if you do not look for work in Latvia.
+SOURCES = ["LinkedIn", "cv.lv"]
+
+# cv.lv: every active ad in these categories is read through the site's public API.
+CVLV_CATEGORIES = ["INFORMATION_TECHNOLOGY"]
+# cv.lv has no search by role, so IT ads that are not engineering work are skipped by their title
+# (each word also matches longer words that start with it).
+CVLV_SKIP_TITLE_WORDS = [
+    "sales", "pārdošan", "продаж", "marketing", "mārketing", "маркетинг", "grāmatved", "accountant",
+    "бухгалтер", "recruit", "personāl", "talent acquisition", "dizain", "designer", "дизайн",
+    "customer success", "account manager", "business development", "biznesa attīstīb",
+]
+
 # LinkedIn locations in order of priority: jobs from the first one are applied to first, then the next,
 # and the remote search across Europe (added in main.py) only fills the rest of the daily limit.
 SEARCH_LOCATIONS = ["Latvia", "Estonia", "Lithuania"]

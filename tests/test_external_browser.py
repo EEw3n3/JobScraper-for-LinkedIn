@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from applier import answers, easy_apply, external
 
@@ -94,3 +94,33 @@ class AtsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrivacyGateTests(unittest.TestCase):
+    """The "I Agree" page before a form is a consent: accepted only when the profile allows consents."""
+
+    def gate(self):
+        driver = Mock()
+        body = Mock(text="Privacy notice\nPlease read our privacy policy before you apply.\nI Agree")
+        driver.find_element.return_value = body
+        button = Mock()
+        return driver, button
+
+    def test_accepted_only_with_consent(self):
+        from applier import answers
+        for allowed in (True, False):
+            driver, button = self.gate()
+            profile = {"accept_application_consents": allowed}
+
+            def answer(question, kind, options, required=True):
+                return answers.resolve(question, kind, options, profile)
+
+            with patch.object(external, "action_buttons", return_value=[("i agree", button)]), \
+                    patch.object(external, "click") as click, patch.object(external, "pause"):
+                if allowed:
+                    self.assertTrue(external.accept_privacy_gate(driver, answer))
+                    click.assert_called_once_with(driver, button)
+                else:
+                    with self.assertRaises(external.NeedsManual):
+                        external.accept_privacy_gate(driver, answer)
+                    click.assert_not_called()

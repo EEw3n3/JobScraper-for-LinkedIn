@@ -149,7 +149,7 @@ def form_action(box, include_disabled=False):
     return ("submit", typed[-1]) if typed else (None, None)
 
 
-def open_form(driver, url):
+def open_form(driver, url, answer_fn=None):
     """Navigate to the application form of a posting; return the ATS name."""
     ats = detect_ats(url)
     if ats == "lever" and not urlsplit(url).path.rstrip("/").endswith("/apply"):
@@ -167,7 +167,7 @@ def open_form(driver, url):
     if ats in ACCOUNT_REQUIRED:
         raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself")
     if not form_has_fields(driver):
-        accept_privacy_gate(driver)
+        accept_privacy_gate(driver, answer_fn)
     # On a company's own page the Greenhouse form can sit in an embedded iframe.
     if not form_has_fields(driver):
         frames = [frame for frame in driver.find_elements(By.CSS_SELECTOR, "iframe#grnhse_iframe, iframe[src*='greenhouse.io']")
@@ -198,17 +198,24 @@ def open_form(driver, url):
     return ats
 
 
+PRIVACY_QUESTION = "I agree to the privacy notice"
 PRIVACY_AGREE = ("i agree", "agree", "i accept", "accept and continue", "piekrītu", "согласен", "принимаю")
 
 
-def accept_privacy_gate(driver):
-    """A privacy notice that must be accepted before the form opens (for example a Ripplehire "I Agree" page).
-    It is the same consent as the form's own privacy checkbox; cookie banners are handled elsewhere."""
+def accept_privacy_gate(driver, answer_fn=None):
+    """A privacy notice that must be accepted before the form opens (a Ripplehire-style "I Agree" page).
+    It is the same consent as the form's own privacy checkbox, so it is accepted only when the profile allows
+    consents (accept_application_consents); otherwise the application stops for the applicant. Cookie banners
+    are handled elsewhere."""
     page = driver.find_element(By.TAG_NAME, "body").text.lower()
     if not re.search(r"privacy (policy|notice)|privātuma|конфиденциальн", page):
         return False
     for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
         if text.strip() in PRIVACY_AGREE and "cookie" not in page[:300]:
+            value = answer_fn(PRIVACY_QUESTION, "checkbox", [], True)[0] if answer_fn else None
+            if not value:
+                raise NeedsManual("privacy notice must be accepted before the form, and accept_application_consents "
+                                  "is off; accept it yourself")
             click(driver, element)
             pause(3, 5)
             return True
@@ -319,7 +326,7 @@ def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_ste
 
     if workday.is_workday(url):
         return workday.run_workday(driver, url, answer_fn, files, submit, screenshot_path, login_wait, say=say)
-    ats = open_form(driver, url)
+    ats = open_form(driver, url, answer_fn)
     reason = no_form_reason(driver)
     if reason == "closed":
         return "closed", [], ats
@@ -341,7 +348,7 @@ def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_ste
                 continue
             if account_form(driver):
                 raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself", filler.log)
-            if not form_has_fields(driver) and accept_privacy_gate(driver):
+            if not form_has_fields(driver) and accept_privacy_gate(driver, answer_fn):
                 continue  # A single-page app shows its privacy notice only after loading.
             filler.fill(form_container(driver), lambda: form_container(driver))
             # React forms (Greenhouse) re-render after an upload, so look the form up again.

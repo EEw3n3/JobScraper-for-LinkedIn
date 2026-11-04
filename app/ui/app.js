@@ -10,14 +10,18 @@ const SITES = {
     sub: "Finds fresh LinkedIn jobs for your roles, scores them against your CV and applies with Easy Apply and on company sites.",
     starting: "Searching LinkedIn for jobs…",
     login: "Not signed in to LinkedIn: run main.py login",
+    saved: "Saved on LinkedIn",
+    savedNow: "Opening your saved LinkedIn jobs…",
   },
   cvlv: {
     name: "cv.lv",
     stages: ["cv.lv IT jobs", "Read the ads", "AI score vs CV", "Mail", "Apply"],
     idle: "cv.lv: ready to look for jobs",
-    sub: "Reads every cv.lv IT job, your saved ones first, scores them against your CV and applies with the cv.lv form or on the employer's site.",
+    sub: "Reads every cv.lv IT job, your saved ones first, scores them against your CV and applies with the cv.lv form or on the employer's site. No daily limit.",
     starting: "Reading cv.lv jobs…",
     login: "Not signed in to cv.lv: run main.py login --site cvlv",
+    saved: "Saved on cv.lv",
+    savedNow: "Opening your saved cv.lv vacancies…",
   },
 };
 const STAGES = [
@@ -38,7 +42,7 @@ const api = () => window.pywebview.api;
 
 function newView() {
   return { stages: {}, counts: { found: 0, parsed: 0, scored: 0, applied: 0, manual: 0 }, log: "",
-           now: "Waiting to start", percent: 0, label: null, mailOnly: false, mailCounts: null, items: [] };
+           now: "Waiting to start", percent: 0, label: null, mailOnly: false, savedOnly: false, mailCounts: null, items: [] };
 }
 const state = { running: false, site: "linkedin", runSite: null, views: { linkedin: newView(), cvlv: newView() },
                 selected: null };
@@ -78,7 +82,7 @@ const CHECK = '<svg aria-hidden="true" viewBox="0 0 12 12" width="10" height="10
 const RING = 2 * Math.PI * 20;
 
 function buildStages() {
-  const names = SITES[state.site].stages;
+  const names = stageNames();
   $("stages").innerHTML = STAGES.map((s, i) => `<li class="stage pending" id="stage-${s.id}">
       <div class="node"><svg class="ring" aria-hidden="true" viewBox="0 0 48 48">
         <circle class="r-track" cx="24" cy="24" r="20"/>
@@ -86,6 +90,12 @@ function buildStages() {
         <span class="s-num">${s.icon}</span><span class="s-check">${CHECK}</span></div>
       ${i < STAGES.length - 1 ? '<div class="link" aria-hidden="true"><i></i></div>' : ""}
       <div class="s-name">${names[i]}</div><div class="s-info"></div></li>`).join("");
+}
+
+function stageNames() {
+  const site = SITES[state.site];
+  // A run over saved vacancies starts by reading the saved list instead of searching.
+  return view().savedOnly ? [site.saved, ...site.stages.slice(1)] : site.stages;
 }
 
 function renderStages() {
@@ -96,7 +106,8 @@ function renderStages() {
     const el = $(`stage-${s.id}`);
     const share = st.total ? Math.min(1, st.done / st.total) : 0;
     el.className = `stage ${st.status}${st.status === "active" && !st.total ? " waiting" : ""}`;
-    el.setAttribute("aria-label", `Stage ${s.icon}: ${SITES[state.site].stages[i]}`);
+    el.setAttribute("aria-label", `Stage ${s.icon}: ${stageNames()[i]}`);
+    el.querySelector(".s-name").textContent = stageNames()[i];
     const offset = st.status === "active" ? RING * (1 - Math.max(share, 0.04)) : st.status === "pending" ? RING : 0;
     el.querySelector(".r-fill").setAttribute("stroke-dashoffset", offset.toFixed(2));
     el.querySelector(".s-num").textContent = st.status === "error" ? "!" : s.icon;
@@ -150,7 +161,9 @@ function renderHeader() {
   $("start-label").textContent = mine ? "Stop" : "Start";
   $("mail-btn").disabled = state.running || !state.gmail;
   $("workday-btn").disabled = state.running;
-  $("launch-title").textContent = mine ? (v.mailOnly ? "Checking mail" : `${site.name}: working on applications`)
+  $("saved-btn").disabled = state.running;
+  $("launch-title").textContent = mine ? (v.mailOnly ? "Checking mail"
+      : v.savedOnly ? `${site.name}: applying to saved jobs` : `${site.name}: working on applications`)
     : busyElsewhere ? `${site.name}: waiting` : v.label === "done" ? `${site.name}: run finished`
     : v.label === "error" ? `${site.name}: run stopped` : site.idle;
   $("launch-sub").textContent = mine && v.mailOnly ? "Only sorting Gmail into labels. Nothing is sent."
@@ -281,9 +294,9 @@ async function begin(v, skipped, args, now) {
   resetProgress(v);
   for (const id of skipped) v.stages[id].status = "skipped";
   renderStages();
-  const [dryRun = false, skipScrape = false, mailOnly = false, workday = false] = args;
-  const result = await api().start(dryRun, skipScrape, mailOnly, workday, state.site);
-  if (!result.ok) { v.mailOnly = false; toast(result.error); return; }
+  const [dryRun = false, skipScrape = false, mailOnly = false, workday = false, saved = false] = args;
+  const result = await api().start(dryRun, skipScrape, mailOnly, workday, state.site, saved);
+  if (!result.ok) { v.mailOnly = false; v.savedOnly = false; toast(result.error); return; }
   state.runSite = state.site;
   setRunning(true);
   setNow(now, v);
@@ -300,6 +313,7 @@ async function toggleRun() {
   const v = view();
   const mode = document.querySelector("input[name=mode]:checked").value;
   v.mailOnly = false;
+  v.savedOnly = false;
   await begin(v, mode === "apply" ? ["collect", "parse", "analyze", "mail"] : [], [$("dry-run").checked, mode === "apply"],
               mode === "apply" ? "Opening the browser to apply…" : SITES[state.site].starting);
 }
@@ -309,6 +323,7 @@ async function checkMail() {
   if (state.running) return;
   const v = view();
   v.mailOnly = true;
+  v.savedOnly = false;
   v.mailCounts = null;
   await begin(v, ["collect", "parse", "analyze", "apply"], [false, false, true], "Sorting mail: offers, rejections, applications…");
 }
@@ -318,8 +333,19 @@ async function applyWorkday() {
   if (state.running) return;
   const v = view();
   v.mailOnly = false;
+  v.savedOnly = false;
   await begin(v, ["collect", "parse", "analyze", "mail"], [$("dry-run").checked, false, false, true],
               "Opening Workday: sign in on the employer's site in the Chrome window (Sign in with email); the app fills in the rest");
+}
+
+// Vacancies the user saved on the shown site: nothing new is collected or scored, each one gets a tailored CV.
+async function applySaved() {
+  if (state.running) return;
+  const v = view();
+  v.mailOnly = false;
+  v.savedOnly = true;
+  await begin(v, ["parse", "analyze", "mail"], [$("dry-run").checked, false, false, false, true],
+              SITES[state.site].savedNow);
 }
 
 // ---------- switching sites --------------------------------------------------------------
@@ -476,7 +502,8 @@ async function refreshFacts() {
   state.root = s.root;
   state.gmail = s.gmail;
   $("auto-submit").checked = s.auto_submit;
-  const facts = [`Limit: ${s.daily_limit} applications a day on ${SITES[site].name}`, `Min. score: ${s.min_score}`,
+  const facts = [site === "cvlv" ? "No daily limit" : `Limit: ${s.daily_limit} applications a day on LinkedIn`,
+                 `Min. score: ${s.min_score}`,
                  site === "cvlv" ? "cv.lv form and employer sites" : s.apply_external ? "Easy Apply and company sites" : "Easy Apply only"];
   const today = await api().today(site);
   const sent = (today.applied || 0) + (today.unconfirmed || 0);
@@ -527,6 +554,7 @@ window.addEventListener("pywebviewready", async () => {
   $("start-btn").addEventListener("click", toggleRun);
   $("mail-btn").addEventListener("click", checkMail);
   $("workday-btn").addEventListener("click", applyWorkday);
+  $("saved-btn").addEventListener("click", applySaved);
   $("folder-btn").addEventListener("click", () => { if (state.root) api().open_path(state.root + "\\results"); });
   $("report-btn").addEventListener("click", async () => { if (!(await api().open_report())) toast("No report yet"); });
   $("auto-submit").addEventListener("change", async (e) => {

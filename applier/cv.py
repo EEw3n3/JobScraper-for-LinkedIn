@@ -1,4 +1,4 @@
-"""Tailor the base CV to one vacancy without inventing facts, and render it to a one-page PDF.
+"""Tailor the base CV to one vacancy without inventing facts, and render it to a two-page PDF.
 
 The model may only rewrite the summary from facts already in the CV, and
 reorder skills and bullets. Everything it returns is checked; a check failure
@@ -6,8 +6,10 @@ falls back to the original text, never to unverified content.
 
 House rules for every CV: no headline under the name, phone with the country
 code, no "·" separators, only "-" as a dash, no target-role list and no user
-numbers in the summary, everything on one page. An optional Latvian base CV is
-used for employers in Latvia.
+numbers in the summary. Layout (2026-11-04 skeleton): two A4 pages, black serif
+text; page 1 = Profiles, Summary, Experience, Projects; page 2 starts with
+Technical Skills, then Education and Languages. An optional Latvian base CV
+(same layout) is used only when the ad asks for a CV in Latvian.
 """
 
 import base64
@@ -72,7 +74,25 @@ def _bullets(html):
     return [_text(item) for item in items] or ([_text(html)] if _text(html) else [])
 
 
-def load_base_cv(path, language="en"):
+def load_facts(path):
+    """facts_bank.json -> extra verified facts the model may use for one vacancy.
+
+    {"experience": {company: [bullets]}, "projects": {project name: [bullets]}, "skills": {group: [keywords]}}.
+    They are never shown by default; tailoring may swap a few in when a job asks for them.
+    """
+    path = Path(path) if path else None
+    if not path or not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    return clean_all({section: {str(name): [str(value) for value in values]
+                                for name, values in (data.get(section) or {}).items()}
+                      for section in ("experience", "projects", "skills")})
+
+
+PROFILE_LABELS = {"github": "GitHub", "linkedin": "LinkedIn", "gitlab": "GitLab"}
+
+
+def load_base_cv(path, language="en", facts_path=None):
     """Reactive Resume JSON -> a plain dict used for tailoring and rendering."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     basics, sections = data["basics"], data["sections"]
@@ -88,11 +108,15 @@ def load_base_cv(path, language="en"):
         "email": basics.get("email", ""),
         "phone": basics.get("phone", ""),
         "links": [item["website"]["url"] for item in visible("profiles") if item.get("website", {}).get("url")],
+        "profiles": [{"label": PROFILE_LABELS.get(str(item.get("network", "")).lower(), str(item.get("network", ""))
+                                                  .title() or "Link"),
+                      "url": item["website"]["url"]}
+                     for item in visible("profiles") if item.get("website", {}).get("url")],
         "summary": _text(data.get("summary", {}).get("content")),
         "experience": [{"title": item["position"], "org": item["company"], "location": item.get("location", ""),
                         "period": _period(item.get("period")), "bullets": _bullets(item.get("description"))}
                        for item in visible("experience")],
-        "projects": [{"title": item["name"], "org": "", "location": "", "period": _period(item.get("period")),
+        "projects": [{"title": item["name"], "org": item.get("website", {}).get("label", ""), "location": "", "period": _period(item.get("period")),
                       "bullets": _bullets(item.get("description"))} for item in visible("projects")],
         "education": [{"title": item["school"], "org": ", ".join(filter(None, (item.get("degree"), item.get("area")))),
                        "location": item.get("location", ""), "period": _period(item.get("period")),
@@ -101,6 +125,7 @@ def load_base_cv(path, language="en"):
         "languages": [f"{item['language']}: {item['fluency']}" if item.get("fluency") else item["language"]
                       for item in visible("languages")],
         "certifications": [_text(item.get("name", "")) for item in visible("certifications")],
+        "extras": load_facts(facts_path),
     })
 
 
@@ -112,7 +137,16 @@ def cv_plain_text(cv):
     for group in cv["skills"]:
         parts += [group["name"], *group["keywords"]]
     parts += cv["languages"] + cv["certifications"]
+    for section in (cv.get("extras") or {}).values():
+        for values in section.values():
+            parts += values
     return "\n".join(filter(None, parts))
+
+
+def _extras(cv, section, item):
+    """Extra verified bullets for one experience (by company) or project (by name)."""
+    facts = (cv.get("extras") or {}).get(section) or {}
+    return facts.get(item["org"]) or facts.get(item["title"]) or []
 
 
 def _tokens(text):
@@ -150,16 +184,20 @@ TAILOR_SCHEMA = {
             "required": ["name", "keywords"]}},
         "experience_order": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
         "project_order": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+        "experience_extra": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+        "project_extra": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
     },
     "required": ["summary", "skill_groups", "experience_order", "project_order"],
 }
 
 LANGUAGE_NAMES = {"en": "English", "lv": "Latvian"}
 LABELS = {
-    "en": {"summary": "Summary", "experience": "Experience", "projects": "Projects", "skills": "Skills",
-           "education": "Education", "certifications": "Certifications", "languages": "Languages"},
-    "lv": {"summary": "Kopsavilkums", "experience": "Darba pieredze", "projects": "Projekti", "skills": "Prasmes",
-           "education": "Izglītība", "certifications": "Sertifikāti", "languages": "Valodas"},
+    "en": {"profiles": "Profiles", "summary": "Summary", "experience": "Experience", "projects": "Projects",
+           "skills": "Technical Skills", "education": "Education", "certifications": "Certifications",
+           "languages": "Languages"},
+    "lv": {"profiles": "Profili", "summary": "Kopsavilkums", "experience": "Darba pieredze", "projects": "Projekti",
+           "skills": "Tehniskās prasmes", "education": "Izglītība", "certifications": "Sertifikāti",
+           "languages": "Valodas"},
 }
 # A CV applies for one vacancy: it never lists the roles the candidate is open to.
 ROLE_LIST = re.compile(r"\bopen to\b|\binterested in\b.*\broles\b|\batvērts\b|\bgatavs strādāt\b", re.I)
@@ -191,6 +229,9 @@ def unsourced_sentences(text, cv):
         for item in cv[section]:
             sources += [f"{item['title']} {bullet}" for bullet in item["bullets"]]
     sources += [f"{group['name']} {' '.join(group['keywords'])}" for group in cv["skills"]]
+    for section in ("experience", "projects"):
+        for item in cv[section]:
+            sources += [f"{item['title']} {bullet}" for bullet in _extras(cv, section, item)]
     source_words = [_content_words(source) for source in sources]
     missing = []
     for sentence in re.split(r"(?<=[.!?])\s+", text):
@@ -221,7 +262,7 @@ def summary_problems(text, cv=None):
     if cv is not None:
         problems += [f"not based on the CV: {sentence}" for sentence in unsourced_sentences(text, cv)]
         original = _sentences(cv["summary"])
-        # The closing sentence of the summary is the applicant's own words: always kept.
+        # The closing "ready to learn" sentence is the applicant's own words: always kept.
         if len(original) > 1 and original[-1] not in text:
             problems.append("closing sentence changed")
     if (cv is None or cv.get("language", "en") == "en") and re.search(
@@ -233,10 +274,13 @@ def summary_problems(text, cv=None):
 
 
 def tailor_prompt(cv, title, description):
-    numbered = {
-        "experience": [{"title": e["title"], "bullets": dict(enumerate(e["bullets"]))} for e in cv["experience"]],
-        "projects": [{"title": p["title"], "bullets": dict(enumerate(p["bullets"]))} for p in cv["projects"]],
-    }
+    def entry(section, item):
+        extras = _extras(cv, section, item)
+        return {"title": item["title"], "bullets": dict(enumerate(item["bullets"])),
+                **({"optional_bullets": dict(enumerate(extras))} if extras else {})}
+
+    numbered = {section: [entry(section, item) for item in cv[section]] for section in ("experience", "projects")}
+    optional_keywords = (cv.get("extras") or {}).get("skills") or {}
     language = LANGUAGE_NAMES.get(cv.get("language", "en"), "English")
     original = _sentences(cv["summary"])
     voice = ("no pronouns like I or my; " if language == "English" else "")
@@ -249,23 +293,51 @@ def tailor_prompt(cv, title, description):
         f"Return JSON with: summary (3-4 sentences, at most {MAX_SUMMARY_WORDS} words, {language}, in the same "
         f"personal but plain voice as the original summary: {voice}no buzzwords such as 'proven track record', "
         "'robust', 'scalable' or 'passionate'; never mention the candidate's age"
-        + (f"; end with this sentence word for word: {original[-1]!r}" if len(original) > 1 else "")
+        + (f" and end with this sentence word for word: {original[-1]!r}" if len(original) > 1 else "")
         + "; build every other sentence from the wording of the original summary or of one CV bullet, keep "
         "project and employer names, and put the facts most relevant to the job first); "
         "skill_groups (every existing group name exactly once, most relevant first, each with ALL its existing "
         "keywords reordered by relevance); experience_order and project_order (for each entry in order, the "
-        "bullet indices reordered by relevance, every index exactly once; in experience, bullet 0 stays first).\n"
-        + json.dumps({"cv": {"summary": cv["summary"], "skills": cv["skills"], **numbered},
+        "bullet indices reordered by relevance, every index exactly once; in experience, bullet 0 stays first); "
+        f"experience_extra and project_extra (for each entry in order, the indices of at most {MAX_EXTRA_BULLETS} "
+        "optional_bullets that clearly match this job, or an empty list; each one replaces the least relevant "
+        "bullet). A skill group may also take up to "
+        f"{MAX_EXTRA_KEYWORDS} of its optional_keywords when the job asks for them. Optional facts are verified "
+        "and may also be used in the summary.\n"
+        + json.dumps({"cv": {"summary": cv["summary"], "skills": cv["skills"], **numbered,
+                             **({"optional_keywords": optional_keywords} if optional_keywords else {})},
                       "job": {"title": title, "description": description[:6000]}}, ensure_ascii=False)
     )
+
+
+# Verified extras that one vacancy may pull in from the facts bank.
+MAX_EXTRA_BULLETS = 2
+MAX_EXTRA_KEYWORDS = 3
+
+
+def _chosen(indices, size):
+    if not isinstance(indices, list):
+        return []
+    picked = [i for i in dict.fromkeys(indices) if isinstance(i, int) and 0 <= i < size]
+    return picked[:MAX_EXTRA_BULLETS]
 
 
 def _permutation(order, size):
     return order if isinstance(order, list) and sorted(order) == list(range(size)) else list(range(size))
 
 
-def apply_tailoring(cv, result):
-    """Return (tailored cv, notes). Invalid parts of the result keep the original."""
+def asked_in_job(keyword, job_text):
+    """A facts-bank keyword counts only when the job ad names it: every main word of it (by its stem) is in the ad."""
+    words = [w for w in re.findall(r"[a-z0-9+#]+", keyword.lower()) if len(w) >= 3 and w not in ("and", "the", "for")]
+    text = (job_text or "").lower()
+    return bool(words) and all(w[:5] in text for w in words)
+
+
+def apply_tailoring(cv, result, job_text=None):
+    """Return (tailored cv, notes). Invalid parts of the result keep the original.
+
+    job_text: the job ad; when given, a keyword from the facts bank is added only if the ad asks for it.
+    """
     notes = []
     base_text = cv_plain_text(cv)
     tailored = json.loads(json.dumps(cv))
@@ -283,25 +355,42 @@ def apply_tailoring(cv, result):
             tailored[field] = value
 
     groups = {group["name"]: group["keywords"] for group in cv["skills"]}
+    optional = (cv.get("extras") or {}).get("skills") or {}
     ordered, used = [], set()
     for group in result.get("skill_groups") or []:
         name = group.get("name") if isinstance(group, dict) else None
         if name in groups and name not in used:
             original = groups[name]
-            keywords = [k for k in dict.fromkeys(group.get("keywords") or []) if k in original]
+            picked = [k for k in dict.fromkeys(group.get("keywords") or [])
+                      if k in original or k in optional.get(name, [])]
+            added = [k for k in picked if k not in original
+                     and (job_text is None or asked_in_job(k, job_text))][:MAX_EXTRA_KEYWORDS]
+            keywords = [k for k in picked if k in original or k in added]
+            if added:
+                notes.append(f"{name}: added verified keywords {added}")
             ordered.append({"name": name, "keywords": keywords + [k for k in original if k not in keywords]})
             used.add(name)
     ordered += [g for g in cv["skills"] if g["name"] not in used]
     tailored["skills"] = ordered
 
-    for section, key in (("experience", "experience_order"), ("projects", "project_order")):
+    for section, key, extra_key in (("experience", "experience_order", "experience_extra"),
+                                    ("projects", "project_order", "project_extra")):
         orders = result.get(key) or []
+        picks = result.get(extra_key) or []
         for index, item in enumerate(tailored[section]):
             order = _permutation(orders[index] if index < len(orders) else None, len(item["bullets"]))
             if section == "experience" and order:
                 # The first bullet of every job is the applicant's main point: it always stays first.
                 order = [0] + [i for i in order if i != 0]
-            item["bullets"] = [item["bullets"][i] for i in order]
+            bullets = [item["bullets"][i] for i in order]
+            extras = _extras(cv, section, item)
+            chosen = [extras[i] for i in _chosen(picks[index] if index < len(picks) else None, len(extras))]
+            if chosen:
+                # Extras go right after the first bullet and push out the least relevant ones.
+                keep = max(len(bullets) - len(chosen), 1)
+                bullets = bullets[:1] + chosen + bullets[1:keep]
+                notes.append(f"{item['title']}: added {len(chosen)} verified bullet(s) from the facts bank")
+            item["bullets"] = bullets
     return tailored, notes
 
 
@@ -310,58 +399,88 @@ def tailor_cv(cv, title, description, llm):
         result = llm.json(tailor_prompt(cv, title, description), TAILOR_SCHEMA)
     except Exception as error:
         return cv, [f"tailoring failed, base CV used: {error}"]
-    return apply_tailoring(cv, result)
+    return apply_tailoring(cv, result, description)
 
 
-# Tighter layouts tried in order until the CV fits on one A4 page:
-# (font pt, line height, page margin mm, section gap px, entry gap px).
-DENSITIES = ((10.2, 1.38, 14, 13, 7), (9.8, 1.32, 12, 10, 6), (9.4, 1.27, 10, 8, 5), (9.0, 1.22, 9, 6, 4))
+# Two A4 pages (2026-11-04 skeleton): page 1 = Profiles, Summary, Experience, Projects;
+# Technical Skills always starts page 2, followed by Education and Languages.
+CV_PAGES = 2
 
 
-def render_html(cv, phone="", country="", density=0):
+def _link_text(url):
+    # "https://www.linkedin.com/in/x/" -> "linkedin.com/in/x"
+    return re.sub(r"^https?://(www\.)?", "", str(url or "")).rstrip("/")
+
+
+def render_html(cv, phone="", country=""):
     cv = clean_all(cv)
     labels = LABELS.get(cv.get("language", "en"), LABELS["en"])
-    font, line, margin, gap, entry_gap = DENSITIES[min(density, len(DENSITIES) - 1)]
 
-    def section(key, body):
-        return f"<h2>{escape(labels[key])}</h2>{body}" if body else ""
+    def section(key, body, cls=""):
+        heading = f"<h2 class='{cls}'>" if cls else "<h2>"
+        return f"<section>{heading}{escape(labels[key])}</h2>{body}</section>" if body else ""
 
-    def entries(items):
-        out = []
-        for item in items:
-            meta = ", ".join(filter(None, (item["org"], item["location"])))
-            bullets = "".join(f"<li>{escape(b)}</li>" for b in item["bullets"])
-            out.append(f"<div class='entry'><div class='row'><b>{escape(item['title'])}</b>"
-                       f"<span>{escape(item['period'])}</span></div>"
-                       + (f"<div class='meta'>{escape(meta)}</div>" if meta else "")
-                       + (f"<ul>{bullets}</ul>" if bullets else "") + "</div>")
-        return "".join(out)
+    def bullets(items):
+        return f"<ul>{''.join(f'<li>{escape(b)}</li>' for b in items)}</ul>" if items else ""
 
-    contacts = [str(contact) for contact in (cv["location"], cv["email"], phone_text(phone or cv["phone"], country),
-                                             *cv["links"]) if contact]
-    skills = "".join(f"<div><b>{escape(g['name'])}:</b> {escape(', '.join(g['keywords']))}</div>" for g in cv["skills"])
+    def row(left, right, bold=False):
+        left = f"<b>{escape(left)}</b>" if bold else escape(left)
+        return f"<div class='row'><span>{left}</span><span>{escape(right)}</span></div>"
+
+    def jobs(items):
+        # Row 1: company (bold) | location. Row 2: position | dates. Then bullets.
+        return "".join(f"<div class='entry'>{row(item['org'], item['location'], True)}"
+                       f"{row(item['title'], item['period'])}{bullets(item['bullets'])}</div>" for item in items)
+
+    def schools(items):
+        # Row 1: school (bold) | location. Row 2: qualification | dates. Then the grade line.
+        return "".join(f"<div class='entry'>{row(item['title'], item['location'], True)}"
+                       f"{row(item['org'], item['period'])}"
+                       + "".join(f"<div>{escape(b)}</div>" for b in item["bullets"]) + "</div>" for item in items)
+
+    def projects(items):
+        # Row 1: project name (bold) | dates. Then the link line and bullets.
+        return "".join(f"<div class='entry'>{row(item['title'], item['period'], True)}"
+                       + (f"<div>{escape(item['org'])}</div>" if item["org"] else "")
+                       + f"{bullets(item['bullets'])}</div>" for item in items)
+
+    profiles = cv.get("profiles") or [{"label": "Link", "url": url} for url in cv.get("links", [])]
+    profiles = sorted(profiles, key=lambda p: (p["label"] != "GitHub", p["label"] != "LinkedIn"))
+    profiles_html = "".join(f"<div class='item'><b>{escape(p['label'])}</b><div><a href='{escape(p['url'])}'>"
+                            f"{escape(_link_text(p['url']))}</a></div></div>" for p in profiles)
+    contacts = " | ".join(escape(str(c)) for c in (cv["email"], phone_text(phone or cv["phone"], country),
+                                                   cv["location"]) if c)
+    skills = "".join(f"<div class='item'><b>{escape(g['name'])}</b><div>{escape(', '.join(g['keywords']))}</div></div>"
+                     for g in cv["skills"])
+    languages = ""
+    for entry in cv["languages"]:
+        name, _, level = str(entry).partition(":")
+        languages += f"<div class='item'><b>{escape(name.strip())}</b>" + (
+            f"<div>{escape(level.strip())}</div>" if level.strip() else "") + "</div>"
     return f"""<!doctype html><html lang="{escape(cv.get('language', 'en'))}"><head><meta charset="utf-8">
 <title>{escape(cv['name'])} CV</title><style>
-@page {{ size: A4; margin: {margin}mm {margin + 1}mm; }}
-body {{ font-family: Arial, Helvetica, sans-serif; font-size: {font}pt; color: #111; line-height: {line}; margin: 0; }}
-h1 {{ font-size: {font * 2:.1f}pt; margin: 0 0 4px; }}
-.contacts {{ font-size: {font - .9:.1f}pt; color: #333; display: flex; flex-wrap: wrap; gap: 2px 16px; }}
-h2 {{ font-size: {font + 1.3:.1f}pt; text-transform: uppercase; letter-spacing: .04em;
-border-bottom: 1px solid #999; margin: {gap}px 0 {max(gap // 2, 3)}px; padding-bottom: 2px; }}
-p {{ margin: 0; }} .entry {{ margin-bottom: {entry_gap}px; page-break-inside: avoid; }}
-.row {{ display: flex; justify-content: space-between; gap: 12px; }}
-.row span, .meta {{ color: #444; font-size: {font - .7:.1f}pt; }} ul {{ margin: 3px 0 0 16px; padding: 0; }}
-li {{ margin: 1px 0; }}
+@page {{ size: A4; margin: 16mm 18mm; }}
+* {{ color: #000; }}
+body {{ font-family: Caladea, Cambria, Georgia, serif; font-size: 10pt; line-height: 1.45; margin: 0; }}
+h1 {{ font-size: 22pt; font-weight: bold; margin: 0 0 4px; line-height: 1.2; }}
+h2 {{ font-size: 13pt; font-weight: bold; border-bottom: 1px solid #000; margin: 22px 0 8px; padding-bottom: 2px; }}
+h2.new-page {{ break-before: page; page-break-before: always; margin-top: 0; }}
+p {{ margin: 0; }} a {{ text-decoration: none; }}
+.entry {{ margin-bottom: 12px; break-inside: avoid; }} .entry:last-child {{ margin-bottom: 0; }}
+.item {{ margin-bottom: 6px; break-inside: avoid; }}
+.row {{ display: flex; justify-content: space-between; gap: 12px; }} .row span:last-child {{ text-align: right; }}
+ul {{ margin: 4px 0 0 18px; padding: 0; }} li {{ margin: 0 0 4px; }}
 </style></head><body>
 <h1>{escape(cv['name'])}</h1>
-<div class="contacts">{''.join(f'<span>{escape(c)}</span>' for c in contacts)}</div>
+<div class="contacts">{contacts}</div>
+{section('profiles', profiles_html)}
 {section('summary', f"<p>{escape(cv['summary'])}</p>" if cv['summary'] else '')}
-{section('experience', entries(cv['experience']))}
-{section('projects', entries(cv['projects']))}
-{section('skills', skills)}
-{section('education', entries(cv['education']))}
+{section('experience', jobs(cv['experience']))}
+{section('projects', projects(cv['projects']))}
+{section('skills', skills, 'new-page')}
+{section('education', schools(cv['education']))}
 {section('certifications', ''.join(f'<div>{escape(c)}</div>' for c in cv['certifications']))}
-{section('languages', escape(', '.join(cv['languages'])))}
+{section('languages', languages)}
 </body></html>"""
 
 
@@ -371,15 +490,12 @@ def pdf_pages(pdf_path):
 
 
 def render_cv_pdf(driver, cv, folder, pdf_name, phone="", country=""):
-    """Write cv.html and the PDF, tightening the layout until it fits on one page. Returns (pdf, notes)."""
-    html_path, pdf_path = Path(folder) / "cv.html", Path(folder) / pdf_name
-    for density in range(len(DENSITIES)):
-        html_path.write_text(render_html(cv, phone, country, density), encoding="utf-8")
-        pdf_path = html_to_pdf(driver, html_path, Path(folder) / pdf_name)
-        pages = pdf_pages(pdf_path)
-        if pages <= 1:
-            return pdf_path, []
-    return pdf_path, [f"CV does not fit on one page ({pages} pages) even in the tightest layout"]
+    """Write cv.html and the two-page PDF. Returns (pdf, notes); a note when it is not exactly two pages."""
+    html_path = Path(folder) / "cv.html"
+    html_path.write_text(render_html(cv, phone, country), encoding="utf-8")
+    pdf_path = html_to_pdf(driver, html_path, Path(folder) / pdf_name)
+    pages = pdf_pages(pdf_path)
+    return pdf_path, ([] if pages == CV_PAGES else [f"CV has {pages} pages instead of {CV_PAGES}"])
 
 
 def render_letter_html(text, name):
@@ -387,7 +503,7 @@ def render_letter_html(text, name):
                          for part in re.split(r"\n\s*\n|\s\|\s", text) if part.strip())
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{escape(name)} Cover Letter</title><style>"
             "@page { size: A4; margin: 22mm 20mm; } body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt;"
-            " line-height: 1.5; color: #111; } p { margin: 0 0 10px; }</style></head>"
+            " line-height: 1.5; color: #000; } p { margin: 0 0 10px; }</style></head>"
             f"<body>{paragraphs}</body></html>")
 
 

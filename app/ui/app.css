@@ -68,7 +68,8 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--shadow); }
 
 /* ---------- title row -------------------------------------------------------------- */
-.title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+/* The title keeps at least 340px; when the buttons do not fit beside it they move to their own row below. */
+.title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px 24px; flex-wrap: wrap; }
 .title-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 h1 { text-wrap: balance; font-size: 26px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; }
 #launch-sub { color: var(--soft); font-size: 14px; margin-top: 6px; max-width: 560px; }
@@ -302,7 +303,7 @@ button.ok:hover { background: #213434; }
 }
 
 /* "Check mail" sits beside the start button: same height, quieter. */
-.actions { flex: none; display: inline-flex; align-items: center; gap: 10px; }
+.actions { flex: none; display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 100%; }
 .mail-btn { height: 40px; gap: 8px; padding: 0 16px 0 14px; }
 .mail-btn svg { width: 16px; height: 16px; }
 .mail-btn:disabled { opacity: .45; cursor: default; }
@@ -386,4 +387,4 @@ html[data-direction="back"]::view-transition-new(root) { animation-name: site-in
 @keyframes site-in { from { opacity: 0; transform: translateX(64px) scale(.985); } }
 @keyframes site-out-back { to { opacity: 0; transform: translateX(48px) scale(.985); } }
 @keyframes site-in-back { from { opacity: 0; transform: translateX(-64px) scale(.985); } }
-.title-text { flex: 1; min-width: 0; }
+.title-text { flex: 1 1 340px; min-width: 0; }

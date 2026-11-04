@@ -160,3 +160,12 @@ class PipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CvLanguageTests(unittest.TestCase):
+    def test_english_unless_the_ad_asks_for_latvian(self):
+        from applier.pipeline import wants_latvian_cv
+        self.assertFalse(wants_latvian_cv("Prasības: labas latviešu valodas zināšanas. Sūti savu CV!"))
+        self.assertTrue(wants_latvian_cv("Lūdzam sūtīt CV latviešu valodā līdz 30.11."))
+        self.assertTrue(wants_latvian_cv("Please send your CV in Latvian"))
+        self.assertFalse(wants_latvian_cv("Fluent Latvian and English required. Send your CV in English."))

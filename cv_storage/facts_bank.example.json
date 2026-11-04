@@ -1,0 +1,22 @@
+{
+  "experience": {
+    "Example SIA": [
+      "Tested every release on real Android and Windows devices before it went out.",
+      "Wrote internal scripts that cut a weekly manual report from an hour to minutes."
+    ]
+  },
+  "projects": {
+    "Price Monitor": [
+      "Wrote automated end-to-end checks against the live site."
+    ]
+  },
+  "skills": {
+    "Backend": [
+      "rate limiting"
+    ],
+    "Tools": [
+      "pytest",
+      "manual testing"
+    ]
+  }
+}

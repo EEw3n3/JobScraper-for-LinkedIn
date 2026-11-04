@@ -129,7 +129,7 @@ class Api:
             "gmail": (ROOT / "secrets" / "gmail_token.json").exists(),
         }
 
-    def start(self, dry_run=False, skip_scrape=False, mail_only=False, workday=False, site=None):
+    def start(self, dry_run=False, skip_scrape=False, mail_only=False, workday=False, site=None, saved=False):
         if self.process is not None and self.process.poll() is None:
             return {"ok": False, "error": "A run is already in progress"}
         if not PYTHON.exists():
@@ -138,12 +138,15 @@ class Api:
         if workday:
             # Workday jobs from earlier runs: each site opens and waits while the applicant signs in.
             argv = [str(PYTHON), "-u", "main.py", "apply", "--workday"] + (["--dry-run"] if dry_run else [])
+        elif saved:
+            # Only the vacancies the applicant saved on the site themselves: nothing new is collected.
+            argv = [str(PYTHON), "-u", "main.py", "apply", "--saved"] + (["--dry-run"] if dry_run else [])
         elif mail_only:
             # Only sorts Gmail: nothing is collected, scored or sent.
             argv.append("--mail-only")
         elif dry_run:
             argv.append("--dry-run")
-        if skip_scrape:
+        if skip_scrape and not (saved or workday):
             argv.append("--skip-scrape")
         if site in SITE_FILTER and not mail_only:
             argv += ["--source", site]

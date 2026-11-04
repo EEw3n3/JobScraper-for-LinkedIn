@@ -6,6 +6,8 @@ application as needs_manual instead of being worked around.
 """
 
 import re
+import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from selenium.common.exceptions import (ElementClickInterceptedException, ElementNotInteractableException,
@@ -58,7 +60,14 @@ def decline_cookies(driver):
                 return True
             except WebDriverException:
                 continue
-    return False
+    # Usercentrics and similar banners live in a shadow root that normal lookups do not reach.
+    return bool(driver.execute_script(
+        "const words = arguments[0];"
+        " for (const host of document.querySelectorAll('*')) { if (!host.shadowRoot) continue;"
+        "  for (const b of host.shadowRoot.querySelectorAll('button')) {"
+        "   const t = (b.innerText || '').trim().toLowerCase();"
+        "   if (b.offsetParent !== null && words.some(w => t === w)) { b.click(); return true; } } }"
+        " return false;", list(COOKIE_DECLINE)))
 
 
 def detect_ats(url):
@@ -157,6 +166,8 @@ def open_form(driver, url):
         ats = next((name for name, markers in PAGE_ATS.items() if any(marker in source for marker in markers)), ats)
     if ats in ACCOUNT_REQUIRED:
         raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself")
+    if not form_has_fields(driver):
+        accept_privacy_gate(driver)
     # On a company's own page the Greenhouse form can sit in an embedded iframe.
     if not form_has_fields(driver):
         frames = [frame for frame in driver.find_elements(By.CSS_SELECTOR, "iframe#grnhse_iframe, iframe[src*='greenhouse.io']")
@@ -185,6 +196,23 @@ def open_form(driver, url):
         if any(word in page for word in LOGIN_WORDS):
             raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself")
     return ats
+
+
+PRIVACY_AGREE = ("i agree", "agree", "i accept", "accept and continue", "piekrītu", "согласен", "принимаю")
+
+
+def accept_privacy_gate(driver):
+    """A privacy notice that must be accepted before the form opens (for example a Ripplehire "I Agree" page).
+    It is the same consent as the form's own privacy checkbox; cookie banners are handled elsewhere."""
+    page = driver.find_element(By.TAG_NAME, "body").text.lower()
+    if not re.search(r"privacy (policy|notice)|privātuma|конфиденциальн", page):
+        return False
+    for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
+        if text.strip() in PRIVACY_AGREE and "cookie" not in page[:300]:
+            click(driver, element)
+            pause(3, 5)
+            return True
+    return False
 
 
 def start_buttons(driver):
@@ -279,11 +307,14 @@ def form_has_fields(driver):
     return False
 
 
-def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_steps=8, login_wait=0, say=print):
+def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_steps=8, login_wait=0, say=print,
+                 code_fn=None):
     """Fill the employer's form; return (status, answers, ats) like run_application.
 
     login_wait: seconds to wait for the applicant to sign in on a Workday site (0 stops at its sign-in step).
+    code_fn(since): the verification code e-mailed after `since`, or None; only when the applicant allowed it.
     """
+    started = time.time() - 30
     from applier import workday
 
     if workday.is_workday(url):
@@ -303,11 +334,16 @@ def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_ste
                 raise NeedsManual(f"{ats}: CAPTCHA on the form; finish this application yourself", filler.log)
             page = driver.find_element(By.TAG_NAME, "body").text.lower()
             if any(word in page for word in vocabulary.EMAIL_CODE):
-                raise NeedsManual(f"{ats}: the site first sends a code to your e-mail; finish this application yourself",
-                                  filler.log)
+                if not (code_fn and submit):
+                    raise NeedsManual(f"{ats}: the site first sends a code to your e-mail; finish this application "
+                                      "yourself", filler.log)
+                enter_email_code(driver, code_fn, started, ats, filler)
+                continue
             if account_form(driver):
                 raise NeedsManual(f"{ats}: this site needs an applicant account; apply yourself", filler.log)
-            filler.fill(form_container(driver))
+            if not form_has_fields(driver) and accept_privacy_gate(driver):
+                continue  # A single-page app shows its privacy notice only after loading.
+            filler.fill(form_container(driver), lambda: form_container(driver))
             # React forms (Greenhouse) re-render after an upload, so look the form up again.
             action, target = form_action(form_container(driver))
             if action is None:
@@ -324,8 +360,12 @@ def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_ste
                 if not submit:
                     return "ready", filler.log, ats
                 start = driver.current_url
-                target.click()
+                sent = time.time() - 5
+                press(driver, target)
                 pause(4, 6)
+                if code_fn and any(word in driver.find_element(By.TAG_NAME, "body").text.lower()
+                                   for word in vocabulary.EMAIL_CODE):
+                    enter_email_code(driver, code_fn, sent, ats, filler)
                 if captcha_challenge(driver):
                     raise NeedsManual(f"{ats}: CAPTCHA after Submit; finish this application yourself", filler.log)
                 page = driver.find_element(By.TAG_NAME, "body").text.lower()
@@ -334,8 +374,10 @@ def run_external(driver, url, answer_fn, files, submit, screenshot_path, max_ste
                     return "applied", filler.log, ats
                 if errors:
                     raise NeedsManual(f"{ats}: form errors after Submit: " + "; ".join(errors), filler.log)
+                # What the site showed instead of a confirmation, to check by hand.
+                driver.save_screenshot(str(Path(screenshot_path).with_name("after_submit.png")))
                 return "unconfirmed", filler.log, ats
-            target.click()
+            press(driver, target)
             pause(2, 3)
             errors = visible_errors(driver)
             if errors:
@@ -362,9 +404,55 @@ def visible_errors(driver):
     for selector in ERROR_SELECTORS:
         for element in driver.find_elements(By.CSS_SELECTOR, selector):
             text = (element.text or "").strip()
-            if text and visible(element) and len(text) < 200 and text not in found:
+            if text and visible(element) and len(text) < 200 and text not in found \
+                    and element.get_attribute("id") != "__next-route-announcer__" and text != driver.title:
+                # Next.js announces the page title in a role="alert" element; that is not an error.
                 found.append(text)
     return found
+
+
+CODE_INPUTS = ("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file'])"
+               ":not([type='submit']):not([type='button']):not([type='email'])")
+CODE_BUTTONS = ("verify", "confirm", "submit", "continue", "next", "apstiprināt", "turpināt", "подтвердить",
+                "продолжить", "отправить")
+
+
+def enter_email_code(driver, code_fn, since, ats, filler):
+    """Type the code the site has just e-mailed (Greenhouse "security code", Oracle PIN) and confirm it."""
+    code = code_fn(since)
+    if not code:
+        raise NeedsManual(f"{ats}: no verification code arrived in Gmail; finish this application yourself",
+                          filler.log)
+    boxes = [box for box in driver.find_elements(By.CSS_SELECTOR, CODE_INPUTS)
+             if visible(box) and not (box.get_attribute("value") or "").strip()]
+    single = [box for box in boxes if box.get_attribute("maxlength") == "1"]
+    if len(single) >= len(code):
+        for box, char in zip(single, code):
+            box.send_keys(char)
+    else:
+        named = [box for box in boxes if re.search(r"code|otp|pin|kod|код", " ".join(
+            box.get_attribute(name) or "" for name in ("id", "name", "placeholder", "aria-label", "autocomplete")),
+            re.I)]
+        if not (named or boxes):
+            raise NeedsManual(f"{ats}: the code arrived, but no box for it was found; finish this application yourself",
+                              filler.log)
+        (named or boxes)[0].send_keys(code)
+    filler.record("E-mail verification code", "(from Gmail)", "gmail")
+    pause(1, 2)
+    for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
+        if clickable(text) and any(word in text for word in CODE_BUTTONS):
+            press(driver, element)
+            break
+    pause(4, 6)
+
+
+def press(driver, element):
+    """Click a form button: close a cookie banner that appeared late, bring the button into view and,
+    if something still covers it, click it through the DOM."""
+    decline_cookies(driver)
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    pause(0.4, 0.8)
+    click(driver, element)
 
 
 def follow_apply_button(driver, button):
@@ -374,7 +462,9 @@ def follow_apply_button(driver, button):
     """
     original = driver.current_window_handle
     windows = set(driver.window_handles)
-    button.click()
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+    pause(0.5, 1)
+    click(driver, button)
     pause(3, 5)
     opened = [handle for handle in driver.window_handles if handle not in windows]
     if opened:
@@ -383,7 +473,7 @@ def follow_apply_button(driver, button):
         # Sometimes LinkedIn first shows a "continue to the company site" dialog.
         for text, element in action_buttons(driver.find_element(By.TAG_NAME, "body")):
             if re.search(r"continue|продолжить|turpināt", text):
-                element.click()
+                click(driver, element)
                 pause(3, 5)
                 break
         opened = [handle for handle in driver.window_handles if handle not in windows]

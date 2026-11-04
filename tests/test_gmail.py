@@ -169,3 +169,12 @@ class DigestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerificationCodeTests(unittest.TestCase):
+    def test_code_after_a_code_word(self):
+        from utils.gmail import extract_code
+        self.assertEqual(extract_code("Copy and paste this code into the security code field on your "
+                                      "application: Ab3dE5fG"), "Ab3dE5fG")
+        self.assertEqual(extract_code("Your verification PIN is 482913."), "482913")
+        self.assertIsNone(extract_code("Thank you for applying to Acme."))

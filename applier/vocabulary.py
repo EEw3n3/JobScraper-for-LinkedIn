@@ -47,7 +47,7 @@ DONE = (
     "thank you for applying", "thanks for applying", "thank you for your application", "application has been received",
     "application received", "application was submitted", "application has been submitted", "application submitted",
     "application has been sent", "application was sent", "we have received your application",
-    "we received your application", "successfully submitted", "application is complete",
+    "we received your application", "successfully submitted", "successfully received", "application is complete",
     "paldies par pieteikumu", "paldies par jūsu pieteikumu", "paldies par tavu pieteikumu", "pieteikums ir saņemts",
     "pieteikums ir nosūtīts", "pieteikums nosūtīts", "pieteikums veiksmīgi", "veiksmīgi nosūtīts",
     "спасибо за отклик", "спасибо за заявку", "спасибо за ваш отклик", "заявка отправлена", "заявка получена",
@@ -70,7 +70,7 @@ CLOSED = (
 # The site sends a one-time code by e-mail before the form (the applier does not read codes from the mailbox).
 EMAIL_CODE = (
     "verify your email", "verify your e-mail", "one-time password", "one time password", "get otp", "send otp",
-    "verification code", "verifikācijas kod", "apstiprinājuma kod", "vienreizējo paroli", "код подтверждения",
+    "verification code", "security code", "verifikācijas kod", "apstiprinājuma kod", "vienreizējo paroli", "код подтверждения",
     "одноразовый код", "kinnituskood",
 )
 # Cookie banners: only the most privacy-preserving choice is ever clicked.

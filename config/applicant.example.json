@@ -20,6 +20,8 @@
   "earliest_start": "Immediately",
   "salary_eur_month_gross": null,
   "salary_eur_year_gross": null,
+  "current_salary_eur_month_gross": null,
+  "current_salary_eur_year_gross": null,
   "languages": {"English": "Professional working", "Latvian": "B2", "Russian": "Native"},
   "highest_education": "Vocational qualification",
   "has_bachelor_degree": false,
@@ -30,6 +32,7 @@
   "custom_answers": {},
   "apply_external": true,
   "auto_submit": false,
+  "read_email_codes": false,
   "daily_limit": 10,
   "min_score": 65
 }

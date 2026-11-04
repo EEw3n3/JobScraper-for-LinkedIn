@@ -239,3 +239,36 @@ def insert_digest(service, rows, title="JobScraper"):
     return service.users().messages().insert(
         userId="me", internalDateSource="dateHeader",
         body={"raw": raw, "labelIds": ["INBOX", "UNREAD", label_id]}).execute()["id"]
+
+
+# A code is the first 4-10 character token with a digit after a "code" word ("security code ... : Ab3dE5fG").
+CODE_WORD = re.compile(r"code|kods|kodu|код|pin\b|otp", re.I)
+CODE_TOKEN = re.compile(r"\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,10}\b")
+
+
+def extract_code(text):
+    for word in CODE_WORD.finditer(text or ""):
+        token = CODE_TOKEN.search(text, word.end(), word.end() + 200)
+        if token:
+            return token.group(0)
+    return None
+
+
+def wait_for_code(service, since, timeout=150, poll=10, sleep=time.sleep):
+    """The verification code from an e-mail that arrived after `since` (epoch seconds), or None after `timeout`."""
+    deadline = time.time() + timeout
+    while True:
+        found = service.users().messages().list(
+            userId="me", q="newer_than:1d (code OR kods OR код OR PIN OR OTP OR verification)", maxResults=10
+        ).execute().get("messages", [])
+        for item in found:
+            message = service.users().messages().get(userId="me", id=item["id"], format="full").execute()
+            if int(message.get("internalDate", 0)) / 1000 < since:
+                continue
+            subject, _, text = message_text(message["payload"])
+            code = extract_code(f"{subject}\n{text}")
+            if code:
+                return code
+        if time.time() >= deadline:
+            return None
+        sleep(poll)

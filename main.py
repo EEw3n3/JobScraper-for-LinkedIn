@@ -16,6 +16,8 @@ from utils import progress
 from utils.database import JobDatabase
 
 BASE_DIR = Path(__file__).resolve().parent
+# Vacancies the applicant saved on cv.lv and LinkedIn; not named jobs_*.db, so runs never pick it as the newest.
+SAVED_DB = BASE_DIR / "results" / "saved_jobs.db"
 
 
 def new_database_path(output_dir):
@@ -99,6 +101,9 @@ def build_parser():
     apply.add_argument("--link", help="Only this LinkedIn job (its URL or numeric id)")
     apply.add_argument("--headless", action="store_true")
     apply.add_argument("--model", help="Gemini model (or GEMINI_MODEL)")
+    apply.add_argument("--saved", action="store_true",
+                       help="Only the vacancies you saved yourself (cv.lv saved list, LinkedIn saved jobs); "
+                            "nothing new is collected")
     apply.add_argument("--workday", action="store_true",
                        help="Only Workday jobs: open each one and wait while you sign in on its site, then fill it")
     apply.add_argument("--login-wait", type=positive_int, default=5,
@@ -239,7 +244,8 @@ def run_all_command(args):
 
 
 def find_job_description(link):
-    for path in sorted((BASE_DIR / "results").glob("jobs_*.db"), key=lambda p: p.stat().st_mtime, reverse=True):
+    runs = sorted((BASE_DIR / "results").glob("jobs_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in runs + ([SAVED_DB] if SAVED_DB.exists() else []):
         with closing(sqlite3.connect(path)) as connection:
             row = connection.execute("SELECT description FROM jobs WHERE link=?", (link,)).fetchone()
         if row and row[0]:
@@ -321,6 +327,20 @@ def mail_texts_for_apply():
         return []
 
 
+def code_reader_for_apply(profile):
+    """Reads e-mailed verification codes when the applicant allowed it (read_email_codes) and Gmail is connected."""
+    if not profile.get("read_email_codes") or not (BASE_DIR / "secrets" / "gmail_token.json").exists():
+        return None
+    try:
+        from utils.gmail import get_service, wait_for_code
+
+        service = get_service(BASE_DIR / "secrets")
+    except Exception as error:
+        print(f"Gmail code reader off: {error}")
+        return None
+    return lambda since: wait_for_code(service, since)
+
+
 def login_command(args):
     from applier.browser import profile_driver, wait_for_login
 
@@ -342,17 +362,17 @@ def login_command(args):
 
 
 def pin_saved_cvlv(driver, path, llm):
-    """Add the applicant's saved cv.lv vacancies to the run database and pin them; returns how many."""
+    """Add the applicant's saved cv.lv vacancies to the database and pin them; returns their links."""
     import requests
     from applier import cvlv as cvlv_form
     from scraper import cvlv
 
     if not cvlv_form.signed_in(driver):
         print("cv.lv: not signed in, so saved vacancies are skipped (python main.py login --site cvlv)")
-        return 0
+        return []
     db = JobDatabase(path)
     client = cvlv.Client()
-    pinned = 0
+    pinned = []
     try:
         known = {row["link"] for row in db.rows()}
         for number in cvlv_form.vacancy_ids(driver, "saved"):
@@ -366,10 +386,59 @@ def pin_saved_cvlv(driver, path, llm):
                 db.save_job(cvlv.job_row({"id": number}, vacancy,
                                          cvlv.description(vacancy, client, llm.read_image)))
             db.pin(link)
-            pinned += 1
+            pinned.append(link)
     finally:
         db.close()
     return pinned
+
+
+def pin_saved_linkedin(driver, path, log):
+    """Add the jobs saved on LinkedIn to the database and pin them; returns their links.
+
+    Their descriptions are read from each job page while applying. A job already in the application log
+    under another link form (/jobs/view/<slug>-<id>, a bare id) keeps that link, so it is not applied twice.
+    """
+    from applier.easy_apply import SessionProblem, saved_jobs
+
+    try:
+        jobs = saved_jobs(driver)
+    except SessionProblem as problem:
+        print(f"LinkedIn: saved jobs are skipped: {problem}")
+        return []
+    known = {}
+    for row in log.rows():
+        ids = re.findall(r"\d{6,}", row["link"] or "")
+        if ids and "cv.lv" not in row["link"]:
+            known.setdefault(ids[-1], row["link"])
+    db = JobDatabase(path)
+    pinned = []
+    try:
+        for link, title in jobs:
+            link = known.get(re.findall(r"\d{6,}", link)[-1], link)
+            db.discover_job({"Title": title, "Link": link, "Source": "LinkedIn"})
+            db.pin(link)
+            pinned.append(link)
+    finally:
+        db.close()
+    return pinned
+
+
+def collect_saved(driver, path, llm, log, sources):
+    """Links of the vacancies the applicant saved on the chosen sites, read fresh from the sites."""
+    progress.stage("collect", "start")
+    links = []
+    if "cvlv" in sources:
+        progress.step("collect", 0, 0, "Reading the saved cv.lv vacancies…")
+        found = pin_saved_cvlv(driver, path, llm)
+        print(f"cv.lv: {len(found)} saved vacancies")
+        links += found
+    if "linkedin" in sources:
+        progress.step("collect", 0, 0, "Reading the saved LinkedIn jobs…")
+        found = pin_saved_linkedin(driver, path, log)
+        print(f"LinkedIn: {len(found)} saved jobs")
+        links += found
+    progress.stage("collect", "done", found=len(links))
+    return links
 
 
 def apply_command(args):
@@ -385,7 +454,7 @@ def apply_command(args):
         raise RuntimeError(f"Fill in your answers first: copy config/applicant.example.json to {args.applicant}")
     profile = load_profile(args.applicant)
     submit = (args.submit or bool(profile.get("auto_submit"))) and not args.dry_run
-    path = (args.db or latest_database(set(args.source or []))).resolve()
+    path = SAVED_DB.resolve() if args.saved else (args.db or latest_database(set(args.source or []))).resolve()
     db = JobDatabase(path)
     try:
         rows = db.rows()
@@ -399,7 +468,8 @@ def apply_command(args):
         if not rows:
             raise RuntimeError(f"Job {args.link} is not in {path.name}")
     print(f"Database: {path}")
-    base_cv = cvlib.load_base_cv(args.cv_json)
+    # Extra verified facts that tailoring may use for one vacancy (English CV only).
+    base_cv = cvlib.load_base_cv(args.cv_json, facts_path=args.cv_json.with_name("facts_bank.json"))
     lv_json = args.cv_json.with_name(f"{args.cv_json.stem}_lv.json")
     base_cv_lv = cvlib.load_base_cv(lv_json, language="lv") if lv_json.is_file() else None
     log = ApplicationLog(BASE_DIR / "results" / "applications.db")
@@ -408,11 +478,20 @@ def apply_command(args):
     try:
         drivers.append(profile_driver(args.profile_dir, headless=args.headless))
         drivers.append(pdf_driver())
-        if "cvlv" in selected_sources(args) and not args.link and not args.workday:
+        if args.saved:
+            # Nothing new is collected: only what the applicant saved themselves, as the sites list it today.
+            links = set(collect_saved(drivers[0], path, llm, log, selected_sources(args)))
+            db = JobDatabase(path)
+            try:
+                rows = [row for row in db.rows() if row["link"] in links]
+            finally:
+                db.close()
+            print(f"Saved vacancies to go through: {len(rows)}")
+        elif "cvlv" in selected_sources(args) and not args.link and not args.workday:
             # Vacancies the applicant saved on cv.lv themselves are applied to first, whatever their score.
             pinned = pin_saved_cvlv(drivers[0], path, llm)
             if pinned:
-                print(f"cv.lv: {pinned} saved vacancies go first")
+                print(f"cv.lv: {len(pinned)} saved vacancies go first")
                 db = JobDatabase(path)
                 try:
                     rows = db.rows()
@@ -425,6 +504,7 @@ def apply_command(args):
                      site=args.source[0] if args.source and len(args.source) == 1 else None,
                      example_letter=args.letter_example.read_text(encoding="utf-8")
                      if args.letter_example.is_file() else None, mail_texts=mail_texts_for_apply(),
+                     code_fn=code_reader_for_apply(profile),
                      base_cv_lv=base_cv_lv)
         print(f"Applications: {counts}")
         return 0

@@ -103,7 +103,7 @@ def wait_for_login(driver, timeout=600, say=print):
 
 
 def fetch_vacancy(driver, number, client=None, signed=False):
-    """The vacancy as the applicant sees it: signed in, it also tells whether he applied already."""
+    """The vacancy as the applicant sees it: signed in, it also tells whether they applied already."""
     if signed:
         status, vacancy = api(driver, f"/vacancies-service/{number}/public")
         if status == 200 and isinstance(vacancy, dict):
@@ -162,6 +162,8 @@ def open_form(driver, link):
                 break
     box = form(driver)
     if box is None:
+        if re.search(r"pieteicies \d|atcelt pieteikumu", driver.find_element(By.TAG_NAME, "body").text.lower()):
+            return None  # applied before, from cv.lv or by hand
         raise NeedsManual("cv.lv: the application form did not open")
     return box
 
@@ -243,6 +245,8 @@ def run_application(driver, link, answer_fn, files, submit, screenshot_path, sig
     last_errors = None
     try:
         box = open_form(driver, link)
+        if box is None:
+            return "already_applied", []
         for _ in range(max_steps):
             if external.captcha_challenge(driver):
                 raise NeedsManual("cv.lv: CAPTCHA on the form; finish this application yourself", filler.log)

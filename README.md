@@ -148,9 +148,16 @@ How tailoring works, so you can write the base CV for it:
   bullets. Any new technology, number, employer or buzzword makes the tool keep your original text.
 - The last sentence of your summary is always kept word for word.
 - The first bullet of every job always stays first: put your main point there.
-- The PDF is shrunk until it fits on one A4 page.
-- Optional: `cv_storage\base_cv_lv.json`, a Latvian version of the same CV, is used for jobs located
-  in Latvia (and the cover letter is then written in Latvian too).
+- The PDF is a clean two-page A4 layout in black serif type: name and one contact line, then
+  Profiles, Summary, Experience and Projects on page 1; Technical Skills always starts page 2,
+  followed by Education and Languages. If a CV comes out longer or shorter, the run notes it.
+- Optional: `cv_storage\facts_bank.json` (copy `facts_bank.example.json`) holds extra true facts that
+  are not on the CV by default: bullets per employer or project and keywords per skill group (use
+  the same group names as in your CV). For one job, tailoring may swap in up to two of those bullets
+  and up to three keywords, and a keyword only when the job ad itself names it.
+- Optional: `cv_storage\base_cv_lv.json`, a Latvian version of the same CV. Applications go in
+  English; the Latvian CV (and a Latvian cover letter) is used only when the ad asks for a CV in
+  Latvian.
 
 **Your answers for application forms: `config\applicant.json`.** Copy it from
 `applicant.example.json` and fill in every `null`. The forms are answered from these fields first;
@@ -161,14 +168,16 @@ the model only answers required questions that your CV can answer truthfully.
 | `first_name`, `last_name`, `email`, `phone`, `phone_country`, `city`, `linkedin`, `github`, `website` | Contact fields. `phone_country` is the option text LinkedIn shows, for example `"Latvia (+371)"`; its code is added to the phone on the CV |
 | `years_experience_total`, `skills_years` | "How many years of experience with X" questions. A skill missing here is never guessed |
 | `eu_work_authorization`, `needs_visa_sponsorship`, `willing_to_relocate`, `remote_ok`, `hybrid_ok`, `onsite_ok` | Yes/no questions |
-| `notice_period`, `earliest_start`, `salary_eur_month_gross`, `salary_eur_year_gross` | Availability and salary questions |
+| `notice_period`, `earliest_start`, `salary_eur_month_gross`, `salary_eur_year_gross` | Availability and salary questions. A field that asks for a date (YYYY-MM-DD) or "figure only" gets the value in that format |
+| `current_salary_eur_month_gross`, `current_salary_eur_year_gross` | "Current or last salary" questions; never filled from the desired salary. Leave `null` to answer them yourself, or set a fixed answer in `custom_answers` |
 | `languages`, `highest_education`, `has_bachelor_degree`, `driving_licence` | Language, education and licence questions |
 | `eeo_answer` | Diversity questions (default "Prefer not to say") |
 | `accept_application_consents` | Whether privacy or terms checkboxes on forms may be ticked. Never decided by the model |
 | `extra_facts`, `custom_answers` | Extra true facts, and fixed answers for exact question texts |
 | `apply_external` | Also apply on employer sites, not only with Easy Apply |
 | `auto_submit` | `false`: fill in and stop before Submit. `true`: submit |
-| `daily_limit`, `min_score` | At most this many applications per 24 hours, only to jobs scored at least `min_score` |
+| `read_email_codes` | `true`: when an employer site e-mails a verification code (Greenhouse "security code", Oracle PIN), read it from your Gmail (see Gmail sorting) and type it in. Off by default; only used on real submits |
+| `daily_limit`, `min_score` | At most this many LinkedIn applications per 24 hours (cv.lv has no daily limit), only to jobs scored at least `min_score` |
 
 **Your cover letter example: `config\cover_letter_example.md`.** One real letter you wrote yourself,
 in English. Each new letter follows its structure and voice, uses only facts from your CV and
@@ -182,7 +191,7 @@ sentence. Language levels are left out of letters (the CV carries them).
 | `.env` | Gemini key and model settings | No |
 | `config\applicant.json` | Your form answers | No |
 | `config\cover_letter_example.md` | Your example letter | No |
-| `cv_storage\*.pdf`, `cv_storage\base_cv.json`, `cv_storage\base_cv_lv.json` | Your CVs | No |
+| `cv_storage\*.pdf`, `cv_storage\base_cv.json`, `cv_storage\base_cv_lv.json`, `cv_storage\facts_bank.json` | Your CVs and extra facts | No |
 | `browser_profile\` | The LinkedIn session of the tool's Chrome | No |
 | `secrets\` | Gmail OAuth client and token | No |
 | `results\` | Job databases, reports, tailored CVs and letters, screenshots, logs | No |
@@ -214,7 +223,10 @@ You can also pass `--role` and `--country` to `scrape` for a single run.
 "Dry run" ticked for the first runs and click Start. Each site is its own workspace with its own look,
 progress, log, lists and daily limit; a run always collects from and applies to the chosen site only.
 A full run collects jobs, reads descriptions, scores them, sorts Gmail (if connected) and applies.
-"Send applications" skips collection and applies to the newest collected jobs. "Check mail" only sorts
+"Send applications" skips collection and applies to the newest collected jobs. "Saved jobs" collects
+nothing new: it reads the vacancies you saved yourself on the chosen site (LinkedIn saved jobs,
+including ones LinkedIn moved to "In progress" after you clicked Apply, or the cv.lv saved list) and
+applies to each with a tailored CV, whatever its score. "Check mail" only sorts
 Gmail replies (offers, rejections, confirmations) and sends nothing. Jobs the tool could not finish appear under "Needs you" with
 the reason, an AI summary of the job and what to do; mark them "I applied myself" when done. The
 "Auto-submit" switch writes `auto_submit` to `config\applicant.json`.
@@ -225,6 +237,7 @@ the reason, an AI summary of the job and what to do; mark them "I applied myself
 .\.venv\Scripts\python.exe main.py scrape --headless --browsers 1
 .\.venv\Scripts\python.exe main.py apply --dry-run --limit 3
 .\.venv\Scripts\python.exe main.py apply
+.\.venv\Scripts\python.exe main.py apply --saved --dry-run
 .\.venv\Scripts\python.exe main.py mark-applied <job id>
 ```
 
@@ -393,8 +406,10 @@ application as `needs_manual` rather than guessing. Privacy and terms consents a
 from `accept_application_consents`, never by the model.
 
 `--dry-run` stops before Submit and discards the draft. Without it, `apply` submits only when
-`--submit` is given or `auto_submit` is true in the profile, at most `daily_limit` per 24 hours with
-1.5–4 minute pauses. Results, answers and review screenshots go to `results/applications.html`;
+`--submit` is given or `auto_submit` is true in the profile, at most `daily_limit` LinkedIn
+applications per 24 hours with 1.5–4 minute pauses (cv.lv has no daily limit and shorter pauses).
+`apply --saved` goes through the jobs you saved on LinkedIn and cv.lv instead of the collected ones;
+their descriptions are read from each job page. Results, answers and review screenshots go to `results/applications.html`;
 `results/applications.db` remembers every job so none is applied to twice. LinkedIn's User
 Agreement prohibits automated activity, so use this at your own risk to your account.
 
@@ -404,9 +419,12 @@ Greenhouse, Ashby, Workable, Teamtailor, SmartRecruiters, Recruitee, Personio, B
 generically) and filled with the same rules. Optional fields only get the applicant's own data; the
 model answers required questions only, and its free text must pass the same unsupported-term and
 buzzword checks as the CV summary. Cookie banners are only ever declined. A form without a CV upload
-is never submitted. Workday waits for your sign-in (see below); other account-based sites, e-mailed
-codes, CAPTCHA challenges, and questions without a truthful answer stop as `needs_manual` for the
-applicant to finish. `apply --link <job id>` handles
+is never submitted. Workday waits for your sign-in (see below). A site that e-mails a verification
+code stops as `needs_manual`, unless `read_email_codes` is true and Gmail is connected: then the
+code is read from the newest matching e-mail and typed in. Other account-based sites, CAPTCHA
+challenges, and questions without a truthful answer stop as `needs_manual` for the applicant to
+finish. A privacy notice that must be accepted before the form opens ("I agree") is accepted, and
+unconfirmed submits save `after_submit.png` for checking. `apply --link <job id>` handles
 one job.
 
 Set `JOBPARSER_BROWSER_TESTS=1` to also run the Easy Apply flows (2024 and 2026 LinkedIn dialogs) and the

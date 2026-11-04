@@ -1,4 +1,4 @@
-"""Pick suitable scored jobs, tailor the CV, and run Easy Apply with a daily cap and pacing."""
+"""Pick suitable scored jobs, tailor the CV, and apply; LinkedIn has a daily cap and slow pacing, cv.lv none."""
 
 import json
 import random
@@ -90,11 +90,13 @@ class ApplicationLog:
 def candidates(job_rows, log, min_score, submit, retry=False):
     """Scored, suitable jobs not handled yet. A dry-run 'ready' job is retried when submitting.
 
-    A pinned job (the applicant saved it on cv.lv themselves) skips the score and title checks.
+    A pinned job (the applicant saved it themselves) skips the score and title checks. A pinned LinkedIn job may
+    have no description yet: it is read from the job page when applying.
     """
     picked = []
     for row in job_rows:
-        if row.get("parse_status") != "parsed":
+        saved_on_linkedin = row.get("pinned") and "cv.lv" not in (row.get("link") or "")
+        if row.get("parse_status") != "parsed" and not saved_on_linkedin:
             continue
         if not row.get("pinned") and (
                 row.get("analysis_status") != "analyzed" or (row.get("match_score") or 0) < min_score
@@ -166,6 +168,17 @@ def in_latvia(row, details):
     return row.get("country") == "Latvia" or bool(LATVIA.search(details.get("location") or ""))
 
 
+# Applications go in English; the Latvian CV only when the ad itself asks for a CV in Latvian.
+LATVIAN_CV = re.compile(r"(cv|pieteikum\w*|dzīvesgājum\w*|motivācijas vēstul\w*)\W+(\w+\W+){0,3}latviešu valodā|"
+                        r"latviešu valodā\W+(\w+\W+){0,2}(cv|pieteikum)|"
+                        r"\b(cv|resume|application)\b\W+(\w+\W+){0,3}in latvian|"
+                        r"резюме\W+(\w+\W+){0,3}на латышском", re.IGNORECASE)
+
+
+def wants_latvian_cv(description):
+    return bool(LATVIAN_CV.search(description or ""))
+
+
 def applied_in_mail(title, company, mail_texts):
     """A confirmation email that names both the company and the job title."""
     company_key = " ".join(re.findall(r"\w+", (company or "").lower().replace(" sia", "").replace(" as", "")))
@@ -181,12 +194,15 @@ def applied_in_mail(title, company, mail_texts):
 
 def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, submit, limit=None,
         min_score=None, retry=False, example_letter=None, mail_texts=(), base_cv_lv=None, sleep=time.sleep,
+        code_fn=None,
         say=print, workday_wait=0, site=None):
-    """Process candidates up to the daily cap. Returns a count per status.
+    """Apply to the candidates. Returns a count per status.
 
+    The daily limit and the long human-like pauses are for LinkedIn only, which restricts accounts that apply
+    too fast; cv.lv jobs have no cap. A dry run stops after 5 jobs per site, and limit caps each site in this run.
     base_cv_lv: the Latvian CV, used for jobs in Latvia (the English base_cv otherwise).
     example_letter: the applicant's own cover letter, used as the model for one letter per job.
-    site: "linkedin" or "cvlv" when the run is for one site only; its daily limit is counted on its own.
+    site: kept for callers that run one site only; the LinkedIn limit is always counted on LinkedIn jobs alone.
     workday_wait: seconds to wait for the applicant's sign-in on each Workday site; when set, only Workday
     jobs from earlier runs are handled.
     mail_texts: subjects and snippets of application confirmation emails, to skip jobs already applied to.
@@ -195,37 +211,49 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
     from scraper import cvlv
 
     min_score = profile.get("min_score", 65) if min_score is None else min_score
-    cap = max(0, int(profile.get("daily_limit", 10)) - log.submitted_last_day(site)) if submit else 5
+    caps = {"linkedin": max(0, int(profile.get("daily_limit", 10)) - log.submitted_last_day("linkedin"))
+            if submit else 5,
+            "cvlv": None if submit else 5}  # None: no cap
     if limit is not None:
-        cap = min(cap, limit)
+        caps = {name: limit if cap is None else min(cap, limit) for name, cap in caps.items()}
     picked = candidates(job_rows, log, min_score, submit, retry)
     if workday_wait:
         # The applicant sits at the computer to sign in: only jobs an earlier run found on Workday.
         picked = [row for row in picked if log.ats(row["link"])[0] == "workday"]
-    say(f"Candidates: {len(picked)}; this run handles up to {cap} "
+    per_site = {name: sum(1 for row in picked if (cvlv.is_cvlv(row["link"])) == (name == "cvlv")) for name in caps}
+    total = sum(n if caps[name] is None else min(n, caps[name]) for name, n in per_site.items())
+    say(f"Candidates: {len(picked)} (LinkedIn {per_site['linkedin']}, cv.lv {per_site['cvlv']}); this run handles "
+        f"up to {caps['linkedin']} on LinkedIn and {'all' if caps['cvlv'] is None else caps['cvlv']} on cv.lv "
         f"({'SUBMITS applications' if submit else 'dry run, stops before Submit'})")
     counts = {}
-    progress.stage("apply", "start", total=min(cap, len(picked)), candidates=len(picked), submit=submit)
+    progress.stage("apply", "start", total=total, candidates=len(picked), submit=submit)
 
     def report(status, row, company=""):
         counts[status] = counts.get(status, 0) + 1
         progress.emit("result", status=status, title=row["title"], company=company, link=row["link"],
                       score=row.get("match_score"))
 
+    def full(name):
+        return caps[name] is not None and done_per_site[name] >= caps[name]
+
     cv_text = cvlib.cv_plain_text(base_cv)
     name = re.sub(r"\W+", "_", f"{profile.get('first_name', '')} {profile.get('last_name', '')}").strip("_") or "CV"
     handled = 0
+    done_per_site = {"linkedin": 0, "cvlv": 0}
     cvlv_client, cvlv_signed = cvlv.Client(), None
     linkedin_problem = None
-    for row in picked:
-        if handled >= cap:
+    for index, row in enumerate(picked):
+        if full("linkedin") and full("cvlv"):
             break
         link, title = row["link"], row["title"]
         from_cvlv = cvlv.is_cvlv(link)
+        site_name = "cvlv" if from_cvlv else "linkedin"
+        if full(site_name):
+            continue
         if linkedin_problem and not from_cvlv:
             continue  # LinkedIn stopped this run (sign-in or daily limit); cv.lv jobs still go ahead.
-        say(f"-> {title} (score {row['match_score']})")
-        progress.step("apply", handled, min(cap, len(picked)), f"Opening the job: {title}")
+        say(f"-> {title} (score {row['match_score'] if row.get('match_score') is not None else 'saved'})")
+        progress.step("apply", handled, total, f"Opening the job: {title}")
         if INSTRUCTIONS.search(f"{title}\n{row.get('description') or ''}"):
             # Ads that test whether the applicant read them need the applicant.
             log.save(link, title=title, score=row["match_score"], status="needs_manual",
@@ -252,6 +280,10 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
                 say(f"   LinkedIn stopped: {problem}")
                 continue
             details = easy_apply.job_details(driver)
+            if row.get("pinned") and details.get("title"):
+                # A saved job's title comes from the saved list; the job page has the exact one.
+                title = details["title"]
+                row = {**row, "title": title}
         reason = None
         if state == "external" and not profile.get("apply_external", True):
             state, reason = "external_skipped", "Apply on the company site manually"
@@ -268,18 +300,25 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             sleep(random.uniform(4, 9))
             continue
 
+        if not (row.get("description") or details["description"]):
+            log.save(link, title=title, company=details["company"], score=row["match_score"], status="needs_manual",
+                     reason="Could not read the job description, so the CV was not tailored; apply yourself")
+            report("needs_manual", row, details["company"])
+            say("   needs_manual (no description)")
+            continue
         company = details["company"]
-        progress.step("apply", handled, min(cap, len(picked)), f"Tailoring the CV for {company}: {title}")
+        progress.step("apply", handled, total, f"Tailoring the CV for {company}: {title}")
         folder = Path(out_dir) / f"{datetime.now().strftime('%Y%m%d')}-{slug(details['company'])}-{slug(title)}"
         folder.mkdir(parents=True, exist_ok=True)
-        job_cv = base_cv_lv if base_cv_lv and in_latvia(row, details) else base_cv
+        job_cv = base_cv_lv if base_cv_lv and wants_latvian_cv(row.get("description") or details["description"]) \
+            else base_cv
         tailored, notes = cvlib.tailor_cv(job_cv, title, row.get("description") or details["description"], llm)
         pdf_path, pdf_notes = cvlib.render_cv_pdf(pdf_driver, tailored, folder, f"{name}_CV.pdf",
                                                   profile.get("phone", ""), profile.get("phone_country", ""))
         notes += pdf_notes
         letter = None
         if example_letter and profile.get("generate_cover_letter", True):
-            progress.step("apply", handled, min(cap, len(picked)), f"Writing a cover letter for {company}")
+            progress.step("apply", handled, total, f"Writing a cover letter for {company}")
             letter, letter_notes = letter_lib.write_letter(job_cv, profile, title, details["company"],
                                                            row.get("description") or details["description"],
                                                            example_letter, llm)
@@ -303,14 +342,14 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
                     notes="; ".join(notes) or None)
         original = driver.current_window_handle
         form_name = "the company form" if state == "external" else ("the cv.lv form" if from_cvlv else "Easy Apply")
-        progress.step("apply", handled, min(cap, len(picked)), f"Filling in {form_name}: {company}")
+        progress.step("apply", handled, total, f"Filling in {form_name}: {company}")
         try:
             if state == "external":
                 # A cv.lv ad names the employer's form itself; on LinkedIn the Apply button opens it in a new tab.
                 url, original = (apply_url, original) if from_cvlv else external.follow_apply_button(driver, button)
                 base.update(apply_url=url, ats=external.detect_ats(url))
                 status, given, ats = external.run_external(driver, url, answer_fn, files, submit, screenshot,
-                                                           login_wait=workday_wait, say=say)
+                                                           login_wait=workday_wait, say=say, code_fn=code_fn)
             elif from_cvlv:
                 base.update(ats="cvlv")
                 status, given = cvlv_form.run_application(driver, link, answer_fn, files, submit, screenshot,
@@ -340,12 +379,18 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
         report(status, row, company)
         say(f"   {status}")
         handled += 1
-        progress.step("apply", handled, min(cap, len(picked)), f"Done: {title} · {company}")
-        if handled < cap:
+        done_per_site[site_name] += 1
+        progress.step("apply", handled, total, f"Done: {title} · {company}")
+        if index < len(picked) - 1 and not (full("linkedin") and full("cvlv")):
             # Workday jobs are on different employers' sites, and the applicant is waiting at the computer.
-            pause = random.uniform(10, 20) if workday_wait else (
-                random.uniform(90, 240) if submit else random.uniform(20, 45))
-            progress.step("apply", handled, min(cap, len(picked)),
+            # LinkedIn gets long human-like pauses; cv.lv only a short breath between forms.
+            if workday_wait:
+                pause = random.uniform(10, 20)
+            elif from_cvlv:
+                pause = random.uniform(8, 20) if submit else random.uniform(5, 10)
+            else:
+                pause = random.uniform(90, 240) if submit else random.uniform(20, 45)
+            progress.step("apply", handled, total,
                           f"Pausing {int(pause)} s before the next job so the site does not take this for a bot")
             sleep(pause)
     progress.stage("apply", "done", **counts)

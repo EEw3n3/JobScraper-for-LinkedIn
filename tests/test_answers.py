@@ -128,3 +128,28 @@ class AnswerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FitFormatTests(unittest.TestCase):
+    def test_date_and_figure_fields(self):
+        self.assertRegex(answers.fit_format("Earliest starting date (YYYY-MM-DD)", "Immediately"), r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(answers.fit_format("Desired salary (fix) p.a. EUR (figure only)", "18000+"), "18000")
+        self.assertEqual(answers.fit_format("City", "Riga, Latvia"), "Riga, Latvia")
+
+    def test_per_annum_salary_is_yearly(self):
+        self.assertEqual(answers.rule_answer("Desired salary (fix) p.a. EUR", PROFILE), 21600)
+
+
+class TermsCheckboxTests(unittest.TestCase):
+    def test_terms_but_not_marketing(self):
+        from applier.easy_apply import TERMS
+        self.assertTrue(TERMS.search("i agree to terms & conditions"))
+        self.assertTrue(TERMS.search("piekrītu workingday mājaslapas lietošanas noteikumiem *"))
+        self.assertFalse(TERMS.search("i consent that acme may keep my data for future vacancies"))
+
+
+class CurrentSalaryTests(unittest.TestCase):
+    def test_current_salary_is_not_the_desired_one(self):
+        self.assertIsNone(answers.rule_answer("Current or last Salary (Yearly)", PROFILE))
+        self.assertEqual(answers.rule_answer("Current salary (yearly)", {**PROFILE, "current_salary_eur_year_gross": 9000}), 9000)
+        self.assertEqual(answers.rule_answer("Expected salary (yearly)", PROFILE), 21600)

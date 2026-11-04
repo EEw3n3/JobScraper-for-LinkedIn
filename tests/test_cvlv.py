@@ -227,6 +227,34 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.log.status(cvlv.vacancy_link(1)), "applied")
         self.assertIsNone(self.log.status("https://www.linkedin.com/jobs/view/1"))
 
+    def test_cvlv_has_no_daily_limit(self):
+        # LinkedIn's daily limit is used up, yet every cv.lv job is still applied to.
+        self.profile["daily_limit"] = 2
+        for number in (91, 92):
+            self.log.save(f"https://www.linkedin.com/jobs/view/{number}", title=f"Old {number}", status="applied")
+        rows = [job("https://www.linkedin.com/jobs/view/1", 95)] + [
+            job(cvlv.vacancy_link(n), 70, title=f"Developer {n}") for n in range(1, 5)]
+        ad = {"employerName": "Example SIA", "highlights": {"location": {"countryId": 101}}}
+        with patch.object(easy_apply, "open_job") as linkedin_open:
+            counts, own_form, _, _ = self.run_pipeline(rows, [("cvlv", None, ad)] * 4)
+        self.assertEqual(counts, {"applied": 4})
+        self.assertEqual(own_form.call_count, 4)
+        linkedin_open.assert_not_called()
+        self.assertIsNone(self.log.status("https://www.linkedin.com/jobs/view/1"))
+
+    def test_cvlv_jobs_do_not_use_up_the_linkedin_limit(self):
+        self.profile["daily_limit"] = 1
+        rows = [job(cvlv.vacancy_link(n), 90, title=f"Developer {n}") for n in range(1, 4)] + [
+            job("https://www.linkedin.com/jobs/view/1", 80, title="Python Developer"),
+            job("https://www.linkedin.com/jobs/view/2", 75, title="Backend Developer")]
+        ad = {"employerName": "Example SIA", "highlights": {"location": {"countryId": 101}}}
+        with patch.object(easy_apply, "open_job", return_value=("candidate", Mock())), \
+                patch.object(easy_apply, "job_details", return_value={"company": "Example", "description": ""}), \
+                patch.object(easy_apply, "run_application", return_value=("applied", [])) as easy:
+            counts, own_form, _, _ = self.run_pipeline(rows, [("cvlv", None, ad)] * 3)
+        self.assertEqual(counts, {"applied": 4})
+        self.assertEqual((own_form.call_count, easy.call_count), (3, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

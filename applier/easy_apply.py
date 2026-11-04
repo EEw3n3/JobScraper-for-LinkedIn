@@ -8,6 +8,7 @@ unexpected. Text matching covers English, Latvian and Russian UI labels.
 import random
 import re
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -75,6 +76,11 @@ def has_words(text, key):
     return any(word in text for word in WORDS[key])
 
 
+def plain(text):
+    """Lower case without diacritics, so "Rīga" matches "Riga"."""
+    return unicodedata.normalize("NFKD", (text or "").strip().lower()).encode("ascii", "ignore").decode()
+
+
 def label_of(element):
     return " ".join(filter(None, ((element.get_attribute("aria-label") or ""), (element.text or "")))).strip()
 
@@ -100,7 +106,66 @@ def check_session(driver):
         raise SessionProblem(f"LinkedIn needs you to sign in or verify ({driver.current_url}). Run: python main.py login")
 
 
+# The 2026 job page has generated class names: the "About the job" heading, the expandable text box and
+# the page title ("Python Developer | Acme | LinkedIn") are what stays put.
+ABOUT_HEADING = r"об этой вакансии|about the job|par šo vakanci|par vakanci|apie darbo skelbimą|töökuulutusest"
+EXPAND_DESCRIPTION = """
+const heading = [...document.querySelectorAll('h2, h3')].find(h => new RegExp(arguments[0], 'i').test(h.innerText || ''));
+if (!heading) return false;
+let box = heading.parentElement;
+for (let i = 0; i < 6 && box && !box.querySelector("[data-testid='expandable-text-button'], button"); i++) box = box.parentElement;
+const button = box && (box.querySelector("[data-testid='expandable-text-button']")
+  || [...box.querySelectorAll('button')].find(b => /развернуть|see more|show more|…\\s*more|vairāk|rodyti daugiau|näita rohkem/i.test(b.innerText || '')));
+if (!button) return false;
+button.scrollIntoView({block: 'center'});
+button.click();
+return true;
+"""
+JOB_DETAILS_2026 = """
+const pageTitle = document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*\\|\\s*LinkedIn\\s*$/i, '');
+const [title = '', company = ''] = pageTitle.split(' | ');
+const heading = [...document.querySelectorAll('h2, h3')].find(h => new RegExp(arguments[0], 'i').test(h.innerText || ''));
+let description = '';
+if (heading) {
+  let box = heading.parentElement;
+  for (let i = 0; i < 6 && box && box.innerText.length < 200; i++) box = box.parentElement;
+  const text = box && box.querySelector("[data-testid='expandable-text-box']");
+  description = (text ? text.innerText : (box ? box.innerText.replace(heading.innerText, '') : ''))
+    .replace(/(…\\s*)?(развернуть|свернуть|see more|see less|show more|show less)\\s*$/i, '').trim();
+}
+let location = '';
+const paragraphs = [...document.querySelectorAll('main p, p')];
+const at = paragraphs.findIndex(p => title && (p.innerText || '').trim().startsWith(title));
+if (at >= 0) {
+  const line = paragraphs.slice(at + 1, at + 6).find(p => (p.innerText || '').includes('·'));
+  const first = line && line.querySelector('span');
+  location = first ? first.innerText.trim() : '';
+}
+return {title, company, description, location};
+"""
+
+
+def expand_description(driver):
+    """Open the whole "About the job" text ("… see more" / "… развернуть"); LinkedIn shows only its start."""
+    try:
+        if driver.execute_script(EXPAND_DESCRIPTION, ABOUT_HEADING):
+            pause(0.8, 1.5)
+    except WebDriverException:
+        pass
+
+
 def job_details(driver):
+    expand_description(driver)
+    try:
+        current = driver.execute_script(JOB_DETAILS_2026, ABOUT_HEADING) or {}
+    except WebDriverException:
+        current = {}
+    found = _job_details_classic(driver)
+    # The classic selectors win where they still match; the 2026 layout fills the rest.
+    return {key: found.get(key) or (current.get(key) or "").strip() for key in ("title", "company", "description", "location")}
+
+
+def _job_details_classic(driver):
     def first_text(selectors):
         for selector in selectors:
             for element in driver.find_elements(By.CSS_SELECTOR, selector):
@@ -110,6 +175,8 @@ def job_details(driver):
         return ""
 
     return {
+        "title": first_text((".job-details-jobs-unified-top-card__job-title h1", ".jobs-unified-top-card__job-title",
+                             ".t-24.job-details-jobs-unified-top-card__job-title", "h1")),
         "company": first_text((".job-details-jobs-unified-top-card__company-name", ".jobs-unified-top-card__company-name",
                                "div[data-view-name='job-details-company-name']", "a[href*='/company/']")),
         "description": first_text(("#job-details", ".jobs-description__content", ".jobs-box__html-content")),
@@ -119,6 +186,106 @@ def job_details(driver):
                                 ".jobs-unified-top-card__primary-description",
                                 "div[data-view-name='job-details-top-card'] span")),
     }
+
+
+# My items > Saved jobs moved into LinkedIn's job tracker in 2026; ?start=N is ignored there, pages are buttons.
+SAVED_JOBS_URL = "https://www.linkedin.com/jobs-tracker/?stage=saved"
+# Every job link on the page with its title, the link's first <p>: [[job id, title], ...].
+SAVED_JOB_LINKS = """
+const found = [];
+for (const a of document.querySelectorAll("a[href*='/jobs/view/']")) {
+  const m = a.href.match(/\\/jobs\\/view\\/(?:[^/?#]*?-)?(\\d{6,})/);
+  const p = a.querySelector("p");
+  if (m) found.push([m[1], ((p && p.innerText) || a.innerText || "").trim()]);
+}
+return found;
+"""
+# Clicks the pager button for page arguments[0]; true when there was one.
+NEXT_PAGE = """
+const n = String(arguments[0]);
+const byLabel = new RegExp("(page|страниц|lapa)\\\\D*" + n + "$", "i");
+const all = [...document.querySelectorAll("button, a")];
+const button = all.find(b => byLabel.test((b.getAttribute("aria-label") || "").trim()))
+  || all.find(b => (b.innerText || "").trim() === n && b.closest("nav, ul, [class*='pagination']"));
+if (!button || button.disabled) return false;
+button.scrollIntoView({block: "center"});
+button.click();
+return true;
+"""
+# The tracker's "In progress" chip (a label, the URL stays ?stage=saved) opens a popover: "Draft" or
+# "Apply clicked". These three steps open it, pick "Apply clicked" and confirm; each returns true when done.
+IN_PROGRESS_TAB = """
+const tab = [...document.querySelectorAll('label')]
+  .find(e => e.offsetParent && /^(в процессе|in progress|procesā)(\\s|·|$)/i.test((e.innerText || '').trim()));
+if (!tab) return false;
+tab.click();
+return true;
+"""
+APPLY_CLICKED_OPTION = """
+const radio = [...document.querySelectorAll("input[type='radio']")]
+  .find(r => /нажата кнопка|apply clicked|nospiesta poga/i.test(r.getAttribute('aria-label') || ''));
+if (!radio) return false;
+(document.querySelector("label[for='" + radio.id + "']") || radio).click();
+return true;
+"""
+CONFIRM_STAGE = """
+const button = [...document.querySelectorAll('[data-floating-ui-portal] button, [popover] button')]
+  .find(b => /^(выбрать|select|choose|apply|izvēlēties)$/i.test((b.innerText || '').trim()));
+if (!button) return false;
+button.click();
+return true;
+"""
+# Badges LinkedIn puts into the title link's text.
+BADGES = re.compile(r"\s*(,\s*)?(with verification|verified job|verified|подтверждено|apstiprināts)\s*$|"
+                    # 2026: "Title (подтвержденная вакансия)Title" - the badge and the repeated title after it.
+                    r"\s*\((подтвержденная вакансия|verified job|apstiprināta vakance)\).*$", re.I)
+
+
+def saved_job_title(text):
+    line = (text or "").strip().splitlines()[0].strip() if (text or "").strip() else ""
+    return BADGES.sub("", line).strip()
+
+
+def saved_jobs(driver, max_pages=30):
+    """[(link, title)] of the jobs the applicant saved on LinkedIn (job tracker, "Saved"), page by page.
+
+    The title is the list's text and may be rough; the job page's own title replaces it when applying.
+    """
+    found = {}
+    driver.get(SAVED_JOBS_URL)
+    pause(3, 5)
+    check_session(driver)
+
+    def read_tab():
+        for page in range(1, max_pages + 1):
+            # The list renders while it scrolls into view.
+            for _ in range(3):
+                driver.execute_script("window.scrollBy(0, Math.max(600, window.innerHeight));")
+                pause(0.6, 1.2)
+            on_page = {}
+            for job_id, text in driver.execute_script(SAVED_JOB_LINKS) or []:
+                title = saved_job_title(text)
+                if title or job_id not in on_page:
+                    on_page[job_id] = on_page.get(job_id) or title
+            new = {job_id: title for job_id, title in on_page.items() if job_id not in found}
+            found.update(new)
+            if not new or not driver.execute_script(NEXT_PAGE, page + 1):
+                break
+            pause(2.5, 4)
+
+    read_tab()
+    # A saved job whose company-site "Apply" was clicked moves to "In progress" ("Apply clicked"), applied or
+    # not; the application log decides which of them still need applying.
+    driver.execute_script("window.scrollTo(0, 0);")
+    if driver.execute_script(IN_PROGRESS_TAB):
+        pause(1, 2)
+        if driver.execute_script(APPLY_CLICKED_OPTION):
+            pause(0.5, 1)
+            driver.execute_script(CONFIRM_STAGE)
+        pause(3, 5)
+        read_tab()
+    return [(f"https://www.linkedin.com/jobs/view/{job_id}/", title or f"LinkedIn job {job_id}")
+            for job_id, title in found.items()]
 
 
 def find_apply_button(driver):
@@ -269,6 +436,12 @@ def trap(driver, control):
         " || el.getAttribute('aria-hidden') === 'true';", control))
 
 
+# Accepting the site's terms is a condition of applying, marked as required or not. Marketing and talent-pool
+# consents are not matched here.
+TERMS = re.compile(r"\b(agree|accept)\w* (to )?(the )?terms|terms (and|&) conditions|terms of (use|service)|"
+                   r"lietošanas noteikum|piekrītu\b.*\bnoteikum|условия\w* использования|пользовательск\w* соглашени")
+
+
 def is_required(driver, control, question):
     lowered = (question or "").lower()
     if any(word in lowered for word in OPTIONAL):
@@ -278,6 +451,28 @@ def is_required(driver, control, question):
                 or driver.execute_script("const g = arguments[0].closest('fieldset, .fb-dash-form-element, "
                                          ".jobs-easy-apply-form-section__grouping, label, .application-question');"
                                          " return !!(g && /[*✱]/.test(g.innerText));", control))
+
+
+# Chooses the country with this dialling code in an intl-tel-input flag list; true when it was there.
+PICK_DIAL_CODE = """
+const wrap = arguments[0].closest('.iti, .intl-tel-input');
+const items = wrap ? [...wrap.querySelectorAll("li[data-dial-code='" + arguments[1] + "']")] : [];
+const item = items.find(li => !li.classList.contains('preferred')) || items[0];
+if (!item) return false;
+const flag = wrap.querySelector('.selected-flag, .iti__selected-flag, .iti__selected-country');
+if (flag) flag.click();
+item.click();
+return true;
+"""
+# A fieldset that is one question: radios of a single group and no other fields.
+QUESTION_FIELDSET = """
+const f = arguments[0].closest ? arguments[0].closest('fieldset') : arguments[0];
+if (!f) return false;
+const radios = [...f.querySelectorAll("input[type='radio']")];
+const names = new Set(radios.map(r => r.name || r.id));
+const others = f.querySelectorAll("select, textarea, input:not([type='radio']):not([type='hidden']):not([type='checkbox'])");
+return radios.length > 0 && names.size === 1 && others.length === 0;
+"""
 
 
 class FormFiller:
@@ -322,12 +517,21 @@ class FormFiller:
         found = self.driver.find_elements(By.CSS_SELECTOR, f"label[for='{control.get_attribute('id')}']")
         return found[0] if found else None
 
-    def fill(self, box):
-        self._files(box)
-        self._radios(box)
-        self._selects(box)
-        self._texts(box)
-        self._checkboxes(box, self._checkbox_groups(box))
+    def fill(self, box, find_box=None):
+        """Fill one step. find_box() looks the form up again when the page redraws it while it is filled."""
+        for attempt in range(3):
+            try:
+                self._files(box)
+                self._radios(box)
+                self._selects(box)
+                self._texts(box)
+                self._checkboxes(box, self._checkbox_groups(box))
+                return
+            except StaleElementReferenceException:
+                if find_box is None or attempt == 2:
+                    raise
+                pause(1, 2)
+                box = find_box()
 
     def _files(self, box):
         if not box.find_elements(By.CSS_SELECTOR, "input[type='file']"):
@@ -468,7 +672,7 @@ class FormFiller:
         """Radio buttons outside a fieldset, grouped by name (Lever and other career sites)."""
         groups = {}
         for radio in box.find_elements(By.CSS_SELECTOR, "input[type='radio']"):
-            if self.driver.execute_script("return !!arguments[0].closest('fieldset')", radio):
+            if self.driver.execute_script(QUESTION_FIELDSET, radio):
                 continue
             groups.setdefault(radio.get_attribute("name") or radio.get_attribute("id"), []).append(radio)
         for radios in groups.values():
@@ -498,8 +702,9 @@ class FormFiller:
     def _radio_fieldsets(self, box):
         for fieldset in box.find_elements(By.CSS_SELECTOR, "fieldset"):
             radios = fieldset.find_elements(By.CSS_SELECTOR, "input[type='radio']")
-            if not radios or not visible(fieldset) or any(radio.is_selected() for radio in radios):
-                continue
+            if not radios or not visible(fieldset) or any(radio.is_selected() for radio in radios) \
+                    or not self.driver.execute_script(QUESTION_FIELDSET, fieldset):
+                continue  # A section with several fields: its radio groups are handled one by one.
             legend = fieldset.find_elements(By.CSS_SELECTOR, "legend")
             question = clean_question(legend[0].text if legend else question_text(self.driver, radios[0]))
             if has_words(question, "resume") or fieldset.find_elements(By.CSS_SELECTOR, "input[type='file']") or any(
@@ -556,13 +761,19 @@ class FormFiller:
         selector = ("input:not([type='hidden']):not([type='radio']):not([type='checkbox']):not([type='file'])"
                     ":not([type='submit']):not([type='button']), textarea")
         for control in box.find_elements(By.CSS_SELECTOR, selector):
-            if not visible(control) or (control.get_attribute("value") or "").strip() or trap(self.driver, control) \
+            current = (control.get_attribute("value") or "").strip()
+            prefix = bool(re.fullmatch(r"\+\d{1,4}", current))
+            if not visible(control) or (current and not prefix) or trap(self.driver, control) \
                     or self.skip_text(control):
                 continue
             raw = question_text(self.driver, control)
             question = with_hint(control, clean_question(raw))
             if control.get_attribute("role") == "combobox" and control.get_attribute("aria-autocomplete") != "none" \
                     and self._combobox(control, question):
+                continue
+            if (control.get_attribute("id") or "").endswith("-selectized"):
+                self._selectize(control, question, required=bool(re.search(r"[*✱]", raw))
+                                or is_required(self.driver, control, question))
                 continue
             kind = "number" if (control.get_attribute("type") == "number"
                                 or "numeric" in (control.get_attribute("id") or "")) else (
@@ -585,8 +796,24 @@ class FormFiller:
             if self.plan:
                 self.record(question, value, source)
                 continue
-            control.clear()
-            control.send_keys(str(value))
+            if prefix:
+                # Recruitee-style phone inputs keep the country code; the national number goes after it.
+                number = re.sub(r"\D", "", str(value))
+                code = current.lstrip("+")
+                control.send_keys(Keys.END, number[len(code):] if number.startswith(code) and len(number) > 8 else number)
+            else:
+                control.clear()
+                # A phone box with a country-flag picker (intl-tel-input) takes the number with its country code.
+                if source == "rule" and re.fullmatch(r"[\d ]{6,}", str(value)) \
+                        and self.driver.execute_script("return !!arguments[0].closest('.iti, .intl-tel-input')", control):
+                    country, _ = self.answer("Phone country code", "text", None, False)
+                    code = re.search(r"\+(\d{1,4})", str(country or ""))
+                    # Pick the country in the flag list, so the national number validates; else type +code.
+                    if code and not self.driver.execute_script(PICK_DIAL_CODE, control, code.group(1)):
+                        value = "+" + code.group(1) + re.sub(r"\D", "", str(value))
+                control.send_keys(str(value))
+                if self.driver.execute_script("return !!arguments[0].closest('.iti, .intl-tel-input')", control):
+                    control.send_keys(Keys.TAB)
             if control.get_attribute("role") == "combobox":
                 # A location typeahead: pick the suggestion that matches, else the first one.
                 pause(1.5, 2.5)
@@ -599,6 +826,46 @@ class FormFiller:
                     control.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
             self.record(question, value, source)
             pause(0.3, 0.8)
+
+    def _selectize(self, control, question, required):
+        """A selectize.js list (Traffit: languages, location): type each answer part and pick its option."""
+        wrapper = control.find_element(By.XPATH, "./ancestor::div[contains(@class, 'selectize-control')][1]")
+        if wrapper.find_elements(By.CSS_SELECTOR, ".selectize-input .item"):
+            return  # already chosen
+        value, source = self.answer(question, "text", None, required)
+        if value is None:
+            if required:
+                self.unanswered(question)
+            return
+        multi = "multi" in (wrapper.get_attribute("class") or "")
+        parts = [re.sub(r"\(.*?\)", "", part).strip() for part in re.split(r",|;| and ", str(value))]
+        parts = [part for part in parts if part][: None if multi else 1]
+        picked = []
+        for part in parts:
+            if self.plan:
+                picked.append(part)
+                continue
+            control.click()
+            control.send_keys(part[:5])
+            pause(1.5, 2.5)
+            wanted = plain(part)
+            options = [o for o in wrapper.find_elements(By.CSS_SELECTOR, ".selectize-dropdown .option") if visible(o)]
+            match = next((o for o in options if plain(o.text) == wanted), None) or next(
+                (o for o in options if plain(o.text).startswith(wanted) or wanted.startswith(plain(o.text))), None)
+            if match is None:
+                for _ in part[:5]:
+                    control.send_keys(Keys.BACKSPACE)
+                continue
+            text = match.text.strip()
+            click(self.driver, match)
+            picked.append(text)
+            pause(0.8, 1.5)
+        if not picked:
+            if required:
+                self.unanswered(question)
+            return
+        control.send_keys(Keys.ESCAPE)
+        self.record(question, ", ".join(picked), source)
 
     def skip_text(self, control):
         """A text box that a site-specific filler handles itself (Workday's search lists)."""
@@ -662,6 +929,9 @@ class FormFiller:
             if control.get_attribute("name") in grouped:
                 continue
             label = self.label_for(control)
+            if label is None:
+                wrapping = control.find_elements(By.XPATH, "./ancestor::label[1]")
+                label = wrapping[0] if wrapping else None
             # The 2026 dialog leaves the checkbox label empty and puts its text in a neighbouring element.
             text = ((label.get_attribute("textContent") or "").strip() if label is not None else "") \
                 or question_text(self.driver, control) or self.driver.execute_script(
@@ -676,7 +946,7 @@ class FormFiller:
                 continue
             if not (visible(control) or (label is not None and visible(label))):
                 continue
-            if control.is_selected() or not is_required(self.driver, control, question):
+            if control.is_selected() or not (is_required(self.driver, control, question) or TERMS.search(question.lower())):
                 continue
             value, source = self.answer(question, "checkbox", ["Yes", "No"], True)
             if value != "Yes":

@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
+from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException, WebDriverException
+
 from utils import progress
 from utils.filters import is_unsuitable_job, is_wanted_language
 
@@ -177,6 +179,12 @@ LATVIAN_CV = re.compile(r"(cv|pieteikum\w*|dzīvesgājum\w*|motivācijas vēstul
 
 def wants_latvian_cv(description):
     return bool(LATVIAN_CV.search(description or ""))
+
+
+def browser_gone(error):
+    """The browser window or session itself is lost: the run cannot go on with the next job."""
+    return isinstance(error, (InvalidSessionIdException, NoSuchWindowException)) or bool(
+        re.search(r"disconnected|session deleted|chrome not reachable|no such session", str(error), re.I))
 
 
 def applied_in_mail(title, company, mail_texts):
@@ -367,6 +375,14 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             status = "needs_manual"
             log.save(link, status=status, reason=str(problem), answers=json.dumps(problem.answers, ensure_ascii=False),
                      screenshot=None, **base)
+        except WebDriverException as problem:
+            if browser_gone(problem):
+                raise
+            # One odd form must not end the whole run: this job waits for the applicant, the next one goes on.
+            status = "needs_manual"
+            message = (getattr(problem, "msg", None) or str(problem)).strip().splitlines()[0][:200]
+            log.save(link, status=status, reason=f"Unexpected browser error on the form: {message}", answers=None,
+                     screenshot=None, **base)
         except easy_apply.SessionProblem as problem:
             # LinkedIn's daily Easy Apply limit or a sign-in wall: this job and the rest of LinkedIn wait for
             # the next run, cv.lv goes on.
@@ -389,7 +405,9 @@ def run(job_rows, *, driver, pdf_driver, llm, profile, base_cv, out_dir, log, su
             elif from_cvlv:
                 pause = random.uniform(8, 20) if submit else random.uniform(5, 10)
             else:
-                pause = random.uniform(90, 240) if submit else random.uniform(20, 45)
+                # LinkedIn pauses Easy Apply for an hour after a rapid burst of submissions and publishes no
+                # number; open-source appliers use 30+ s or 45-90 s. Each job also takes 1-2 min to tailor and fill.
+                pause = random.uniform(45, 90) if submit else random.uniform(10, 20)
             progress.step("apply", handled, total,
                           f"Pausing {int(pause)} s before the next job so the site does not take this for a bot")
             sleep(pause)

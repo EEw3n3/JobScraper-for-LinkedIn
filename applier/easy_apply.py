@@ -759,11 +759,13 @@ class FormFiller:
 
     def _texts(self, box):
         selector = ("input:not([type='hidden']):not([type='radio']):not([type='checkbox']):not([type='file'])"
-                    ":not([type='submit']):not([type='button']), textarea")
+                    ":not([type='submit']):not([type='button']):not([type='image']):not([type='reset']), textarea")
         for control in box.find_elements(By.CSS_SELECTOR, selector):
             current = (control.get_attribute("value") or "").strip()
             prefix = bool(re.fullmatch(r"\+\d{1,4}", current))
+            # A read-only or disabled box cannot be typed into (the site fills it or a picker sets it).
             if not visible(control) or (current and not prefix) or trap(self.driver, control) \
+                    or not control.is_enabled() or control.get_attribute("readonly") is not None \
                     or self.skip_text(control):
                 continue
             raw = question_text(self.driver, control)

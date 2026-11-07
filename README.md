@@ -13,8 +13,8 @@ folders that are excluded from git.
 > **Read this before you use it**
 >
 > - **LinkedIn's User Agreement prohibits automated access and automated actions.** Using this tool
->   can get your LinkedIn account restricted or banned. The tool paces itself (one browser, 1.5 to 4
->   minute pauses between applications, a daily limit), but that does not make it allowed. You use it
+>   can get your LinkedIn account restricted or banned. The tool paces itself (one browser, 45 to 90
+>   second pauses between applications, a daily limit), but that does not make it allowed. You use it
 >   at your own risk.
 > - **Start with dry runs.** `auto_submit` is off by default: the tool fills in the forms and stops
 >   before Submit until you turn it on. Read the tailored CVs and letters in `results/` first.
@@ -407,7 +407,7 @@ from `accept_application_consents`, never by the model.
 
 `--dry-run` stops before Submit and discards the draft. Without it, `apply` submits only when
 `--submit` is given or `auto_submit` is true in the profile, at most `daily_limit` LinkedIn
-applications per 24 hours with 1.5–4 minute pauses (cv.lv has no daily limit and shorter pauses).
+applications per 24 hours with 45–90 second pauses (cv.lv has no daily limit and shorter pauses).
 `apply --saved` goes through the jobs you saved on LinkedIn and cv.lv instead of the collected ones;
 their descriptions are read from each job page. Results, answers and review screenshots go to `results/applications.html`;
 `results/applications.db` remembers every job so none is applied to twice. LinkedIn's User

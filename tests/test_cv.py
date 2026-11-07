@@ -149,6 +149,21 @@ class CvTests(unittest.TestCase):
         self.assertIn("<b>English</b><div>Fluent</div>", html)
         self.assertNotIn("DENSITIES", dir(cv))
 
+    def test_links_are_short_clickable_text(self):
+        project = {**self.cv["projects"][0],
+                   "links": cv._project_links({"label": "price.example | github.com/anna/price-monitor"})}
+        changed = {**self.cv, "profiles": [{"label": "LinkedIn", "url": "https://www.linkedin.com/in/anna-test/"},
+                                           {"label": "GitHub", "url": "https://github.com/anna"}],
+                   "projects": [project]}
+        html = cv.render_html(changed)
+        self.assertIn("<a href='https://github.com/anna'>anna</a>", html)
+        self.assertIn("<a href='https://www.linkedin.com/in/anna-test/'>anna-test</a>", html)
+        self.assertIn("<a href='https://price.example'>Website</a> | "
+                      "<a href='https://github.com/anna/price-monitor'>GitHub</a>", html)
+        self.assertIn("Mājaslapa", cv.render_html({**changed, "language": "lv"}))
+        self.assertEqual(cv._project_links({"url": "https://github.com/anna/x", "label": ""}),
+                         ["https://github.com/anna/x"])
+
     def test_latvian_cv_labels_and_voice(self):
         latvian = {**self.cv, "language": "lv", "summary": "Izstrādāju Python servisus."}
         self.assertIn("Darba pieredze", cv.render_html(latvian))

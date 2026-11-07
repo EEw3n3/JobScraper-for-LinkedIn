@@ -92,6 +92,17 @@ def load_facts(path):
 PROFILE_LABELS = {"github": "GitHub", "linkedin": "LinkedIn", "gitlab": "GitLab"}
 
 
+def _full_url(text):
+    text = str(text or "").strip()
+    return text if re.match(r"https?://", text) else f"https://{text}" if text else ""
+
+
+def _project_links(website):
+    """A project's links: the parts of its label ("site.lv | github.com/me/repo"), else its url."""
+    parts = [part for part in re.split(r"\s*\|\s*", website.get("label") or "") if "." in part]
+    return [_full_url(part) for part in parts] or ([_full_url(website["url"])] if website.get("url") else [])
+
+
 def load_base_cv(path, language="en", facts_path=None):
     """Reactive Resume JSON -> a plain dict used for tailoring and rendering."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -117,6 +128,7 @@ def load_base_cv(path, language="en", facts_path=None):
                         "period": _period(item.get("period")), "bullets": _bullets(item.get("description"))}
                        for item in visible("experience")],
         "projects": [{"title": item["name"], "org": item.get("website", {}).get("label", ""), "location": "", "period": _period(item.get("period")),
+                      "links": _project_links(item.get("website") or {}),
                       "bullets": _bullets(item.get("description"))} for item in visible("projects")],
         "education": [{"title": item["school"], "org": ", ".join(filter(None, (item.get("degree"), item.get("area")))),
                        "location": item.get("location", ""), "period": _period(item.get("period")),
@@ -408,8 +420,21 @@ CV_PAGES = 2
 
 
 def _link_text(url):
-    # "https://www.linkedin.com/in/x/" -> "linkedin.com/in/x"
-    return re.sub(r"^https?://(www\.)?", "", str(url or "")).rstrip("/")
+    # A profile link shows its handle: "https://www.linkedin.com/in/x/" -> "x", "https://github.com/me" -> "me".
+    path = re.sub(r"^https?://[^/]+", "", str(url or "")).strip("/")
+    return path.split("/")[-1] if path else re.sub(r"^https?://(www\.)?", "", str(url or "")).rstrip("/")
+
+
+WEBSITE_LABEL = {"en": "Website", "lv": "Mājaslapa"}
+
+
+def _project_link_text(url, language="en"):
+    # A repository shows "GitHub"; any other site shows "Website".
+    return "GitHub" if re.search(r"//(www\.)?github\.com/", url) else WEBSITE_LABEL.get(language, "Website")
+
+
+def _link(url, text):
+    return f"<a href='{escape(url)}'>{escape(text)}</a>"
 
 
 def render_html(cv, phone="", country=""):
@@ -439,15 +464,22 @@ def render_html(cv, phone="", country=""):
                        + "".join(f"<div>{escape(b)}</div>" for b in item["bullets"]) + "</div>" for item in items)
 
     def projects(items):
-        # Row 1: project name (bold) | dates. Then the link line and bullets.
+        # Row 1: project name (bold) | dates. Then the link line ("Website | GitHub", clickable) and bullets.
+        language = cv.get("language", "en")
+
+        def link_line(item):
+            if item.get("links"):
+                return "<div>" + " | ".join(_link(url, _project_link_text(url, language))
+                                            for url in item["links"]) + "</div>"
+            return f"<div>{escape(item['org'])}</div>" if item["org"] else ""
+
         return "".join(f"<div class='entry'>{row(item['title'], item['period'], True)}"
-                       + (f"<div>{escape(item['org'])}</div>" if item["org"] else "")
-                       + f"{bullets(item['bullets'])}</div>" for item in items)
+                       + link_line(item) + f"{bullets(item['bullets'])}</div>" for item in items)
 
     profiles = cv.get("profiles") or [{"label": "Link", "url": url} for url in cv.get("links", [])]
     profiles = sorted(profiles, key=lambda p: (p["label"] != "GitHub", p["label"] != "LinkedIn"))
-    profiles_html = "".join(f"<div class='item'><b>{escape(p['label'])}</b><div><a href='{escape(p['url'])}'>"
-                            f"{escape(_link_text(p['url']))}</a></div></div>" for p in profiles)
+    profiles_html = "".join(f"<div class='item'><b>{escape(p['label'])}</b><div>{_link(p['url'], _link_text(p['url']))}"
+                            "</div></div>" for p in profiles)
     contacts = " | ".join(escape(str(c)) for c in (cv["email"], phone_text(phone or cv["phone"], country),
                                                    cv["location"]) if c)
     skills = "".join(f"<div class='item'><b>{escape(g['name'])}</b><div>{escape(', '.join(g['keywords']))}</div></div>"
@@ -465,7 +497,7 @@ body {{ font-family: Caladea, Cambria, Georgia, serif; font-size: 10pt; line-hei
 h1 {{ font-size: 22pt; font-weight: bold; margin: 0 0 4px; line-height: 1.2; }}
 h2 {{ font-size: 13pt; font-weight: bold; border-bottom: 1px solid #000; margin: 22px 0 8px; padding-bottom: 2px; }}
 h2.new-page {{ break-before: page; page-break-before: always; margin-top: 0; }}
-p {{ margin: 0; }} a {{ text-decoration: none; }}
+p {{ margin: 0; }} a {{ color: #000; text-decoration: underline; }}
 .entry {{ margin-bottom: 12px; break-inside: avoid; }} .entry:last-child {{ margin-bottom: 0; }}
 .item {{ margin-bottom: 6px; break-inside: avoid; }}
 .row {{ display: flex; justify-content: space-between; gap: 12px; }} .row span:last-child {{ text-align: right; }}

@@ -189,12 +189,13 @@ class PipelineTests(unittest.TestCase):
         picked = pipeline.candidates(rows, self.log, 60, submit=True)
         self.assertEqual([row["link"] for row in picked], ["pinned", "a"])
 
-    def run_pipeline(self, rows, open_results):
+    def run_pipeline(self, rows, open_results, employer_effect=None):
         llm = SimpleNamespace(json=Mock(side_effect=RuntimeError("offline")))
         with patch.object(cvlv_form, "signed_in", return_value=True), \
                 patch.object(cvlv_form, "open_job", side_effect=open_results), \
                 patch.object(cvlv_form, "run_application", return_value=("applied", [])) as own_form, \
-                patch("applier.external.run_external", return_value=("applied", [], "recruitee")) as employer, \
+                patch("applier.external.run_external", return_value=("applied", [], "recruitee"),
+                      side_effect=employer_effect) as employer, \
                 patch("applier.external.follow_apply_button") as follow, \
                 patch("applier.external.close_extra_tabs"), \
                 patch("applier.cv.html_to_pdf", side_effect=lambda driver, html, pdf: Path(pdf)):
@@ -217,6 +218,22 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(statuses[cvlv.vacancy_link(1)], ("applied", "cvlv", "Example SIA"))
         self.assertEqual(statuses[cvlv.vacancy_link(2)], ("applied", "recruitee", "Example SIA"))
         self.assertEqual(statuses[cvlv.vacancy_link(3)][0], "closed")
+
+    def test_a_browser_error_on_one_form_does_not_stop_the_run(self):
+        from selenium.common.exceptions import InvalidElementStateException, InvalidSessionIdException
+        rows = [job(cvlv.vacancy_link(1), 90), job(cvlv.vacancy_link(2), 80, title="Backend Developer")]
+        ad = {"employerName": "Example SIA", "highlights": {"location": {"countryId": 101}}}
+        opened = [("external", "https://acme.example/jobs/1", ad), ("external", "https://acme.example/jobs/2", ad)]
+        counts, _, employer, _ = self.run_pipeline(rows, opened, employer_effect=[
+            InvalidElementStateException("invalid element state"), ("applied", [], "other")])
+        self.assertEqual(counts, {"needs_manual": 1, "applied": 1})
+        self.assertEqual(employer.call_count, 2)
+        row = next(row for row in self.log.rows() if row["link"] == cvlv.vacancy_link(1))
+        self.assertIn("Unexpected browser error", row["reason"])
+        # A lost browser session still ends the run.
+        with self.assertRaises(InvalidSessionIdException):
+            self.run_pipeline([job(cvlv.vacancy_link(3), 90)], [("external", "https://acme.example/jobs/3", ad)],
+                              employer_effect=InvalidSessionIdException("invalid session id"))
 
     def test_linkedin_limit_does_not_stop_cvlv(self):
         rows = [job("https://www.linkedin.com/jobs/view/1", 95), job(cvlv.vacancy_link(1), 70)]

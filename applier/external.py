@@ -419,7 +419,7 @@ def visible_errors(driver):
 
 
 CODE_INPUTS = ("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='file'])"
-               ":not([type='submit']):not([type='button']):not([type='email'])")
+               ":not([type='submit']):not([type='button']):not([type='image']):not([type='reset']):not([type='email'])")
 CODE_BUTTONS = ("verify", "confirm", "submit", "continue", "next", "apstiprināt", "turpināt", "подтвердить",
                 "продолжить", "отправить")
 
